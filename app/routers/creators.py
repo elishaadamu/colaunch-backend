@@ -1431,6 +1431,9 @@ def _creator_dict(c: Any, project_map: dict = None) -> dict:
     selected_concept = None
     has_studio_replied = False
 
+    has_ai_concepts = False
+    audience_intelligence = None
+
     if discovery_notes and str(discovery_notes).startswith("{"):
         try:
             parsed = json.loads(discovery_notes)
@@ -1440,6 +1443,8 @@ def _creator_dict(c: Any, project_map: dict = None) -> dict:
             product_concepts = parsed.get("product_concepts") or []
             selected_concept_id = parsed.get("selected_concept_id") or parsed.get("selectedConceptId")
             selected_concept = parsed.get("selected_concept") or parsed.get("selectedConcept")
+            has_ai_concepts = bool(parsed.get("has_ai_concepts") or parsed.get("hasAiConcepts") or (product_concepts and len(product_concepts) > 0 and parsed.get("audience_intelligence")))
+            audience_intelligence = parsed.get("audience_intelligence") or parsed.get("audienceIntelligence")
         except Exception:
             pass
 
@@ -1568,6 +1573,10 @@ def _creator_dict(c: Any, project_map: dict = None) -> dict:
         "reply_text": reply_text,
         "product_concepts": product_concepts,
         "productConcepts": product_concepts,
+        "has_ai_concepts": has_ai_concepts,
+        "hasAiConcepts": has_ai_concepts,
+        "audience_intelligence": audience_intelligence,
+        "audienceIntelligence": audience_intelligence,
         "selected_concept_id": selected_concept_id,
         "selectedConceptId": selected_concept_id,
         "selected_concept": selected_concept,
