@@ -91,7 +91,7 @@ class Settings:
     # STUDIO BRANDING & LOGO (Easily customizable for emails and public pages)
     # You can change the logo URL or studio name here or via .env variables:
     # =========================================================================
-    STUDIO_NAME: str = os.getenv("STUDIO_NAME", "Creator Forge")
+    STUDIO_NAME: str = os.getenv("STUDIO_NAME", "CoLaunch")
     STUDIO_TAGLINE: str = os.getenv("STUDIO_TAGLINE", "Venture Studio & Co-Launch Incubation")
     # Default studio logo (High resolution SVG/PNG mark). Change to your custom logo URL anytime:
     STUDIO_LOGO_URL: str = os.getenv(

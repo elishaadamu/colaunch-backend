@@ -16,7 +16,7 @@ import markdown
 
 from app.config import settings
 
-STUDIO_NAME: str = getattr(settings, "STUDIO_NAME", "Creator Forge")
+STUDIO_NAME: str = getattr(settings, "STUDIO_NAME", "CoLaunch")
 STUDIO_TAGLINE: str = getattr(settings, "STUDIO_TAGLINE", "Venture Studio & Co-Launch Incubation")
 
 # Default curated SaaS visual mockups per category (high-performance Unsplash previews)
@@ -98,11 +98,11 @@ def _render_executive_signature_html(creator_name: str = "", tracking_token: str
           </td>
           <td style="vertical-align:top;">
             <div style="font-size:14px;font-weight:700;color:#0f172a;line-height:1.2;">Alex Rivera</div>
-            <div style="font-size:12px;color:#64748b;font-weight:500;margin-top:3px;">Head of Venture Partnerships • Creator Forge</div>
+            <div style="font-size:12px;color:#64748b;font-weight:500;margin-top:3px;">Head of Venture Partnerships • CoLaunch</div>
             <div style="font-size:12px;color:#475569;margin-top:8px;line-height:1.5;">
               <a href="mailto:{contact_email}" style="color:#0f172a;text-decoration:underline;font-weight:600;">{html.escape(contact_email)}</a>
               <span style="color:#cbd5e1;margin:0 6px;">•</span>
-              <a href="https://creatorforge.com" style="color:#0284c7;text-decoration:none;">creatorforge.com</a>
+              <a href="https://colaunch.app" style="color:#0284c7;text-decoration:none;">colaunch.app</a>
               <span style="color:#cbd5e1;margin:0 6px;">•</span>
               <span style="color:#64748b;">San Francisco, CA</span>
             </div>
@@ -306,7 +306,7 @@ def _render_single_concept_card(
       <tr>
         <td style="padding:6px 14px;background:#090d16;border-top:1px solid #1e293b;text-align:center;">
           <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;color:#64748b;letter-spacing:0.5px;text-transform:uppercase;">
-            100% ENGINEERED &amp; HOSTED BY CREATOR FORGE &bull; ZERO UPFRONT COST &bull; 50/50 CO-LAUNCH
+            100% ENGINEERED &amp; HOSTED BY COLAUNCH &bull; ZERO UPFRONT COST &bull; 50/50 CO-LAUNCH
           </span>
         </td>
       </tr>
@@ -483,7 +483,7 @@ def render_concept_showcase_html(
             🚀 How to Move Forward (Select Your Preferred Concept):
           </div>
           <p style="margin:0 0 10px 0;font-size:13px;color:#334155;line-height:1.55;">
-            Under our 50/50 partnership, Creator Forge covers <strong>100% of engineering, hosting, payment infrastructure, and MVP deployment at zero financial cost to you</strong>.
+            Under our 50/50 partnership, CoLaunch covers <strong>100% of engineering, hosting, payment infrastructure, and MVP deployment at zero financial cost to you</strong>.
             To move forward, <strong>simply reply to this email</strong> with your preferred concept:
           </p>
           <div style="margin:8px 0 12px 0;padding:10px 14px;background:#ffffff;border:1px dashed #94a3b8;border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#0f172a;">
@@ -676,7 +676,7 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         hero_card_html = '''
         <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin:20px 0;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
           <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:8px;">
-            Creator Forge <span style="color:#f59e0b;">⚡</span> <span style="color:#94a3b8;font-weight:normal;">|</span> <span style="color:#334155;font-size:14px;font-weight:600;">50/50 Venture Model</span>
+            CoLaunch <span style="color:#f59e0b;">⚡</span> <span style="color:#94a3b8;font-weight:normal;">|</span> <span style="color:#334155;font-size:14px;font-weight:600;">50/50 Venture Model</span>
           </div>
           <p style="margin:0 0 16px 0;color:#334155;font-size:14px;line-height:1.6;">
             We partner <strong>50/50 with creators</strong> to build custom software tools and monetization apps for their audience. Our team handles 100% of the engineering, hosting, payment setup, and customer support with zero upfront cost to you.
