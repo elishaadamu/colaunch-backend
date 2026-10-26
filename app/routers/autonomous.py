@@ -1260,6 +1260,8 @@ def generate_audience_and_concepts(payload: AudienceAndConceptsGenerateSchema):
                     followers = f"{c_obj.follower_count:,}"
                 bio = c_obj.bio or bio
 
+    frontend_base = (os.getenv("FRONTEND_URL") or getattr(settings, "FRONTEND_URL", "http://localhost:3001")).rstrip("/")
+
     custom_steering_instruction = ""
     if custom_prompt:
         custom_steering_instruction = f"""
@@ -1312,8 +1314,8 @@ Generate a comprehensive JSON object with:
    - "mockupType": MUST be "saas_os" for Concept 1, "ai_copilot" for Concept 2, "knowledge_hub" for Concept 3 (each concept MUST have a distinct visual archetype)
    - "mockup": {{"appUrl": "...", "primaryStat": "...", "primaryMetric": "$18.5K MRR", "activeMetric": "850", "efficiencyMetric": "94%", "accentColor": "emerald/slate/cyan/lime"}}
 3. "pitch_email":
-   - "subject": "Top 3 Software Concepts & Opportunity Blueprint for {c_name}"
-   - "body": High-converting follow-up email presenting the 3 concepts with pricing and 50/50 co-founder terms. Must end with clear call to action: "To move forward, simply reply to this email: 'I will be interested in Concept 1' (or Concept 2, Concept 3)."
+   - "subject": "Software concepts tailored for @{c_handle}"
+   - "body": Professional 1-on-1 plain text email presenting the 3 concepts with pricing and 50/50 terms. Under EACH concept, include its landing page URL: "{frontend_base}/preorder/{c_handle}?concept=<concept-slug>". Strictly DO NOT use any emojis. Sign off professionally as "Alex Rivera\nHead of Venture Partnerships, CoLaunch".
 
 Return valid JSON only matching the structure above."""
 
@@ -1526,17 +1528,20 @@ Return valid JSON only matching the structure above."""
             }
         ],
         "pitch_email": {
-            "subject": f"Top 3 software concepts tailored for @{c_handle}",
+            "subject": f"Software concepts tailored for @{c_handle}",
             "body": (
                 f"Hi {first_name},\n\n"
-                f"Following up as promised! Based on our analysis of your {niche} audience on {platform}, here are the top 3 software product concepts we designed for your community:\n\n"
+                f"Following up on our partnership discussion. Based on our analysis of your {niche} audience on {platform}, here are the top 3 software product concepts we designed for your community:\n\n"
                 f"1. {first_name} OS ($29-$79/mo) — The all-in-one automated operating system for {niche} professionals (Score: 96/100)\n"
+                f"   • Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-os\n\n"
                 f"2. {first_name} Flow AI ($39-$99/mo) — AI-powered workflow assistant tailored for {niche} (Score: 93/100)\n"
-                f"3. {first_name} Pro Hub ($49-$149/mo) — Private software toolkit & deal network (Score: 89/100)\n\n"
-                f"Under our 50/50 partnership, our engineering team will build and deploy the complete MVP at zero cost to you.\n\n"
-                f"Take a look and let us know which concept you'd be most excited to build and launch with us! To move forward, simply reply to this email with: \"I will be interested in Concept 1\" (or Concept 2, Concept 3).\n\n"
+                f"   • Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-flow-ai\n\n"
+                f"3. {first_name} Pro Hub ($49-$149/mo) — Private software toolkit & deal network (Score: 89/100)\n"
+                f"   • Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-pro-hub\n\n"
+                f"Under our 50/50 partnership, our engineering team handles 100% of product development, hosting, billing, and technical support at zero financial cost to you.\n\n"
+                f"Please review the landing page previews above and let us know which concept you prefer. To move forward, simply reply to this email with: \"I will be interested in Concept 1\" (or Concept 2, Concept 3).\n\n"
                 f"Best regards,\n"
-                f"The Creator Forge Team"
+                f"Alex Rivera\nHead of Venture Partnerships, CoLaunch"
             )
         }
     }

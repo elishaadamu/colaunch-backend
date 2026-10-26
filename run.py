@@ -25,7 +25,8 @@ if os.path.exists(env_path):
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 key, _, val = line.partition("=")
-                os.environ[key.strip()] = val.strip()
+                cleaned_val = val.strip().strip('"\'')
+                os.environ[key.strip()] = cleaned_val
 
 import uvicorn
 

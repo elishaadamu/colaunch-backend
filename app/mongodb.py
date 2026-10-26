@@ -33,16 +33,17 @@ except Exception:
 
 
 def get_mongo_uri() -> str:
-    uri = os.getenv("MONGODB_URI", os.getenv("MONGO_URL", "")).strip()
+    uri = os.getenv("MONGODB_URI", os.getenv("MONGO_URL", "")).strip().strip('"\'')
     if not uri:
         try:
             from app.config import settings
-            uri = getattr(settings, "MONGODB_URI", "").strip()
+            uri = getattr(settings, "MONGODB_URI", "").strip().strip('"\'')
         except Exception:
             pass
     if not uri:
         uri = "mongodb+srv://creatorforgeweb_db_user:radLPHdUYy7g3tGB@cluster0.nnewamw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-    return uri
+    return uri.strip().strip('"\'')
+
 
 
 SCHEMA_COLLECTIONS = [
