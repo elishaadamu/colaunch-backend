@@ -243,28 +243,47 @@ def followup_scheduler_status():
 
 @router.post("/preview")
 def preview_rendered_template(data: PreviewRequestSchema, db: Session = Depends(get_db)):
-    """Preview rendered subject and body with a sample or selected creator."""
+    """Preview rendered subject and body with a sample or selected creator from MongoDB Atlas."""
     creator = None
-    if data.sample_handle:
+    from app.mongodb import get_collection
+    coll = get_collection("creators")
+    if coll is not None:
+        if data.sample_handle:
+            clean_handle = data.sample_handle.lstrip("@").strip()
+            doc = coll.find_one({"handle": {"$regex": f"^{re.escape(clean_handle)}$", "$options": "i"}})
+            if doc:
+                creator = type("CreatorObj", (), {
+                    "display_name": doc.get("display_name") or doc.get("handle"),
+                    "handle": doc.get("handle"),
+                    "platform": doc.get("platform", "youtube"),
+                    "follower_count": doc.get("follower_count", 0),
+                    "niche": doc.get("niche") or [],
+                    "bio": doc.get("bio", ""),
+                    "email_public": doc.get("email_public", "")
+                })()
+        if not creator:
+            doc = coll.find_one({})
+            if doc:
+                creator = type("CreatorObj", (), {
+                    "display_name": doc.get("display_name") or doc.get("handle"),
+                    "handle": doc.get("handle"),
+                    "platform": doc.get("platform", "youtube"),
+                    "follower_count": doc.get("follower_count", 0),
+                    "niche": doc.get("niche") or [],
+                    "bio": doc.get("bio", ""),
+                    "email_public": doc.get("email_public", "")
+                })()
+
+    if not creator and data.sample_handle:
         creator = db.query(Creator).filter(Creator.handle == data.sample_handle.lstrip("@")).first()
-    
     if not creator:
         creator = db.query(Creator).first()
 
-    # Fallback mock creator if DB has no creators yet
     if not creator:
-        class MockCreator:
-            display_name = "Alex Rivera"
-            handle = "alexrivera"
-            platform = "youtube"
-            follower_count = 350000
-            niche = ["Tech"]
-            bio = "Building the future of tech & AI software."
-            email_public = "alex@example.com"
-        creator = MockCreator()
+        raise HTTPException(404, "No creator found in MongoDB")
 
-    rendered_subject = auto_svc.render_template(data.template_subject, creator, "AI DevTools Studio")
-    rendered_body = auto_svc.render_template(data.template_body, creator, "AI DevTools Studio")
+    rendered_subject = auto_svc.render_template(data.template_subject, creator, "CoLaunch Studio")
+    rendered_body = auto_svc.render_template(data.template_body, creator, "CoLaunch Studio")
 
     return {
         "creator": {
@@ -1244,7 +1263,32 @@ def generate_audience_and_concepts(payload: AudienceAndConceptsGenerateSchema):
     custom_prompt = (payload.custom_prompt or "").strip()
     brand_color = payload.brand_color or "#10B981"
 
-    if payload.creator_id:
+    if payload.creator_id or payload.creator_handle:
+        from app.mongodb import get_collection
+        coll = get_collection("creators")
+        if coll is not None:
+            c_query = []
+            if payload.creator_id:
+                c_query.extend([{"_id": str(payload.creator_id)}, {"id": str(payload.creator_id)}])
+            if payload.creator_handle:
+                clean_h = payload.creator_handle.lstrip("@").strip()
+                c_query.append({"handle": {"$regex": f"^{re.escape(clean_h)}$", "$options": "i"}})
+            c_doc = coll.find_one({"$or": c_query}) if c_query else None
+            if c_doc:
+                c_name = c_doc.get("display_name") or c_doc.get("name") or c_name
+                first_name = c_name.split()[0] if c_name else "Partner"
+                c_handle = (c_doc.get("handle") or c_handle).lstrip("@").strip()
+                c_niche = c_doc.get("niche")
+                if isinstance(c_niche, list) and c_niche:
+                    niche = c_niche[0]
+                elif isinstance(c_niche, str) and c_niche:
+                    niche = c_niche
+                platform = c_doc.get("platform") or platform
+                if c_doc.get("follower_count"):
+                    followers = f"{c_doc.get('follower_count'):,}"
+                bio = c_doc.get("bio") or bio
+
+    if payload.creator_id and not c_handle:
         with SessionLocal() as db:
             c_obj = db.get(Creator, payload.creator_id)
             if c_obj:
@@ -1271,7 +1315,7 @@ Prioritize this direction heavily in concept naming, target customer, key featur
 """
 
     system_prompt = (
-        "You are an elite venture studio product strategist and AI software architect at Creator Forge. "
+        "You are an elite venture studio product strategist and AI software architect at CoLaunch. "
         "You design high-margin B2B/B2C SaaS products tailored to creator audiences with verified commercial demand."
     )
     prompt = f"""Analyze the creator profile below and engineer the top 3 software product opportunities and deep audience research:
@@ -1297,7 +1341,7 @@ Generate a comprehensive JSON object with:
    - "name": Unique, marketable SaaS name (e.g. {first_name} OS, StreamScale AI, etc.)
    - "tagline": Punchy 1-line value proposition
    - "description": 2-3 sentence overview
-   - "brandColor": Hex code matching product vibe from Creator Forge human studio palette (e.g. "#16A34A" studio emerald, "#0F172A" obsidian slate, "#C8FF3D" forge lime, "#0284C7" ocean cyan, "#D97706" venture amber). Strictly DO NOT use generic purple or violet AI colors.
+   - "brandColor": Hex code matching product vibe from CoLaunch vibrant studio palette (e.g. "#10B981" electric emerald, "#06B6D4" ocean cyan, "#3B82F6" studio blue, "#F59E0B" venture amber, "#C8FF3D" forge lime, "#F43F5E" hot coral). Strictly DO NOT use dark slate (#0F172A, #1E293B, #000000) or generic purple or violet AI colors.
    - "demographicAlignment": Specific buyer demographic matched to {c_name}'s audience
    - "problem": Exact problem solved for {niche} users
    - "customer": Primary target user persona
@@ -1312,12 +1356,40 @@ Generate a comprehensive JSON object with:
    - "mvpDifficulty": "Low (2 weeks)" or "Medium (3 weeks)"
    - "opportunityScore": Integer 90-98
    - "mockupType": MUST be "saas_os" for Concept 1, "ai_copilot" for Concept 2, "knowledge_hub" for Concept 3 (each concept MUST have a distinct visual archetype)
-   - "mockup": {{"appUrl": "...", "primaryStat": "...", "primaryMetric": "$18.5K MRR", "activeMetric": "850", "efficiencyMetric": "94%", "accentColor": "emerald/slate/cyan/lime"}}
+   - "mockup": {{"appUrl": "...", "primaryStat": "...", "primaryMetric": "$18.5K MRR", "activeMetric": "850", "efficiencyMetric": "94%", "accentColor": "emerald/cyan/amber/lime"}}
 3. "pitch_email":
    - "subject": "Software concepts tailored for @{c_handle}"
    - "body": Professional 1-on-1 plain text email presenting the 3 concepts with pricing and 50/50 terms. Under EACH concept, include its landing page URL: "{frontend_base}/preorder/{c_handle}?concept=<concept-slug>". Strictly DO NOT use any emojis. Sign off professionally as "Alex Rivera\nHead of Venture Partnerships, CoLaunch".
 
 Return valid JSON only matching the structure above."""
+
+    def _persist_to_mongo(prod_concepts, aud_intel):
+        try:
+            from app.mongodb import get_collection
+            coll = get_collection("creators")
+            if coll is not None and (payload.creator_id or c_handle):
+                queries = []
+                if payload.creator_id:
+                    queries.extend([{"_id": str(payload.creator_id)}, {"id": str(payload.creator_id)}])
+                if c_handle:
+                    queries.append({"handle": {"$regex": f"^{re.escape(c_handle)}$", "$options": "i"}})
+                if queries:
+                    coll.update_one(
+                        {"$or": queries},
+                        {
+                            "$set": {
+                                "productConcepts": prod_concepts,
+                                "product_concepts": prod_concepts,
+                                "audienceIntelligence": aud_intel,
+                                "audience_intelligence": aud_intel,
+                                "hasAiConcepts": True,
+                                "has_ai_concepts": True,
+                                "updated_at": datetime.utcnow().isoformat()
+                            }
+                        }
+                    )
+        except Exception as mongo_err:
+            logger.warning(f"[Generate Audience & Concepts] Mongo persist warning: {mongo_err}")
 
     raw = None
     try:
@@ -1350,19 +1422,7 @@ Return valid JSON only matching the structure above."""
             if "product_concepts" in data and len(data["product_concepts"]) > 0:
                 data["is_ai_generated"] = True
                 _sanitize_concepts_data(data["product_concepts"])
-                if payload.creator_id:
-                    try:
-                        with SessionLocal() as db:
-                            c_record = db.get(Creator, payload.creator_id)
-                            if c_record:
-                                nd = json.loads(c_record.discovery_notes or "{}") if isinstance(c_record.discovery_notes, str) else (c_record.discovery_notes or {})
-                                nd["product_concepts"] = data["product_concepts"]
-                                nd["audience_intelligence"] = data.get("audience_intelligence")
-                                nd["has_ai_concepts"] = True
-                                c_record.discovery_notes = json.dumps(nd)
-                                db.commit()
-                    except Exception as persist_err:
-                        logger.warning(f"[Generate Audience & Concepts] Persist warning: {persist_err}")
+                _persist_to_mongo(data["product_concepts"], data.get("audience_intelligence"))
                 return data
         except Exception:
             m = re.search(r'\{.*\}', raw, re.DOTALL)
@@ -1372,19 +1432,7 @@ Return valid JSON only matching the structure above."""
                     if "product_concepts" in data and len(data["product_concepts"]) > 0:
                         data["is_ai_generated"] = True
                         _sanitize_concepts_data(data["product_concepts"])
-                        if payload.creator_id:
-                            try:
-                                with SessionLocal() as db:
-                                    c_record = db.get(Creator, payload.creator_id)
-                                    if c_record:
-                                        nd = json.loads(c_record.discovery_notes or "{}") if isinstance(c_record.discovery_notes, str) else (c_record.discovery_notes or {})
-                                        nd["product_concepts"] = data["product_concepts"]
-                                        nd["audience_intelligence"] = data.get("audience_intelligence")
-                                        nd["has_ai_concepts"] = True
-                                        c_record.discovery_notes = json.dumps(nd)
-                                        db.commit()
-                            except Exception as persist_err:
-                                logger.warning(f"[Generate Audience & Concepts] Persist warning: {persist_err}")
+                        _persist_to_mongo(data["product_concepts"], data.get("audience_intelligence"))
                         return data
                 except Exception:
                     pass
@@ -1469,7 +1517,7 @@ Return valid JSON only matching the structure above."""
                 "name": f"{first_name} Flow AI",
                 "tagline": f"AI-powered intelligence copilot tailored for {niche}",
                 "description": f"An intelligent AI copilot that automatically drafts, optimizes, and analyzes {niche} strategies and deliverables in seconds.",
-                "brandColor": "#0F172A",
+                "brandColor": "#06B6D4",
                 "demographicAlignment": f"22-38 Yrs • Early adopters & tech-forward digital workers in {niche}",
                 "problem": "Subscribers spend hours generating assets and optimizing their day-to-day outputs.",
                 "customer": f"Active {niche} practitioners looking to 10x their daily productivity",
@@ -1492,7 +1540,7 @@ Return valid JSON only matching the structure above."""
                     "primaryMetric": "$31.8K MRR",
                     "activeMetric": "1,420 Copilot Runs",
                     "efficiencyMetric": "94%",
-                    "accentColor": "slate"
+                    "accentColor": "cyan"
                 }
             },
             {
@@ -1500,7 +1548,7 @@ Return valid JSON only matching the structure above."""
                 "name": f"{first_name} Pro Hub",
                 "tagline": f"Private community, premium software toolkit & deal network for {niche}",
                 "description": f"A hybrid SaaS toolkit and private master community connecting {first_name}'s top subscribers with private tools, templates, and group calls.",
-                "brandColor": "#06B6D4",
+                "brandColor": "#F59E0B",
                 "demographicAlignment": f"25-45 Yrs • High-intent power subscribers with premium budget",
                 "problem": "Followers want direct mentorship, premium software toolkits, and private networking.",
                 "customer": f"Dedicated power followers and high-intent students in {niche}",
@@ -1523,7 +1571,7 @@ Return valid JSON only matching the structure above."""
                     "primaryMetric": "$28.0K MRR",
                     "activeMetric": "480 VIP Members",
                     "efficiencyMetric": "92%",
-                    "accentColor": "cyan"
+                    "accentColor": "amber"
                 }
             }
         ],
@@ -1546,6 +1594,7 @@ Return valid JSON only matching the structure above."""
         }
     }
 
+    _persist_to_mongo(fallback_data["product_concepts"], fallback_data.get("audience_intelligence"))
     return fallback_data
 
 

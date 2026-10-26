@@ -1430,9 +1430,20 @@ def _creator_dict(c: Any, project_map: dict = None) -> dict:
     selected_concept_id = None
     selected_concept = None
     has_studio_replied = False
-
     has_ai_concepts = False
     audience_intelligence = None
+
+    if isinstance(c, dict):
+        if c.get("productConcepts") or c.get("product_concepts"):
+            product_concepts = c.get("productConcepts") or c.get("product_concepts") or []
+        if c.get("audienceIntelligence") or c.get("audience_intelligence"):
+            audience_intelligence = c.get("audienceIntelligence") or c.get("audience_intelligence")
+        if c.get("hasAiConcepts") is not None:
+            has_ai_concepts = bool(c.get("hasAiConcepts"))
+        elif c.get("has_ai_concepts") is not None:
+            has_ai_concepts = bool(c.get("has_ai_concepts"))
+        elif product_concepts:
+            has_ai_concepts = True
 
     if discovery_notes and str(discovery_notes).startswith("{"):
         try:
@@ -1440,11 +1451,14 @@ def _creator_dict(c: Any, project_map: dict = None) -> dict:
             reply_classification = parsed.get("reply_classification")
             reply_text = parsed.get("reply_text")
             has_studio_replied = bool(parsed.get("has_studio_replied"))
-            product_concepts = parsed.get("product_concepts") or []
+            if not product_concepts:
+                product_concepts = parsed.get("product_concepts") or []
             selected_concept_id = parsed.get("selected_concept_id") or parsed.get("selectedConceptId")
             selected_concept = parsed.get("selected_concept") or parsed.get("selectedConcept")
-            has_ai_concepts = bool(parsed.get("has_ai_concepts") or parsed.get("hasAiConcepts") or (product_concepts and len(product_concepts) > 0 and parsed.get("audience_intelligence")))
-            audience_intelligence = parsed.get("audience_intelligence") or parsed.get("audienceIntelligence")
+            if not has_ai_concepts:
+                has_ai_concepts = bool(parsed.get("has_ai_concepts") or parsed.get("hasAiConcepts") or (product_concepts and len(product_concepts) > 0 and parsed.get("audience_intelligence")))
+            if not audience_intelligence:
+                audience_intelligence = parsed.get("audience_intelligence") or parsed.get("audienceIntelligence")
         except Exception:
             pass
 

@@ -803,11 +803,85 @@ def load_ai_keys(username: str, db: Session = Depends(get_db)):
 def get_user_profile(username: str, db: Session = Depends(get_db)):
     """Retrieve full user profile data for session synchronization."""
     from app.models.creator import UserProfile
-    from fastapi import HTTPException
+    from app.mongodb import get_collection
+    from datetime import datetime
 
     user = db.query(UserProfile).filter(UserProfile.username == username).first()
+
+    # Fallback: Query MongoDB Atlas user_profiles
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        try:
+            u_coll = get_collection("user_profiles")
+            if u_coll is not None:
+                m_user = u_coll.find_one({"$or": [{"username": username}, {"email": username}]})
+                if m_user:
+                    user = UserProfile(
+                        username=m_user.get("username", username),
+                        email=m_user.get("email", f"{username}@gmail.com"),
+                        password=m_user.get("password", ""),
+                        creator_data=m_user.get("creator_data"),
+                        calendar_data=m_user.get("calendar_data"),
+                        launch_pack_data=m_user.get("launch_pack_data"),
+                        studio_data=m_user.get("studio_data"),
+                        ai_keys=m_user.get("ai_keys")
+                    )
+                    db.add(user)
+                    db.commit()
+                    db.refresh(user)
+        except Exception as e:
+            logger.warning(f"[Profile] MongoDB lookup notice: {e}")
+
+    # Auto-initialize admin/creatorforgeweb profile if not present
+    if not user:
+        admin_email = os.getenv("ADMIN_EMAIL", "creatorforgeweb@gmail.com")
+        clean_u = (username or "").lower().strip()
+        if clean_u in ("creatorforgeweb", "admin") or clean_u == admin_email.split("@")[0].lower() or clean_u == admin_email.lower():
+            try:
+                user = UserProfile(
+                    username="creatorforgeweb",
+                    email=admin_email,
+                    password="",
+                    creator_data={},
+                    calendar_data={},
+                    launch_pack_data={},
+                    studio_data={},
+                    ai_keys={}
+                )
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+
+                u_coll = get_collection("user_profiles")
+                if u_coll is not None:
+                    u_coll.update_one(
+                        {"username": "creatorforgeweb"},
+                        {"$set": {
+                            "username": "creatorforgeweb",
+                            "email": admin_email,
+                            "creator_data": {},
+                            "calendar_data": {},
+                            "launch_pack_data": {},
+                            "studio_data": {},
+                            "ai_keys": {},
+                            "updated_at": datetime.utcnow().isoformat()
+                        }},
+                        upsert=True
+                    )
+            except Exception as e:
+                logger.warning(f"[Profile] Auto-init notice: {e}")
+
+    if not user:
+        # Return empty profile rather than 404 to allow client to sync
+        return {
+            "status": "success",
+            "username": username,
+            "email": "",
+            "creator_data": None,
+            "calendar_data": None,
+            "launch_pack_data": None,
+            "studio_data": None,
+            "ai_keys": None
+        }
 
     return {
         "status": "success",
@@ -819,6 +893,7 @@ def get_user_profile(username: str, db: Session = Depends(get_db)):
         "studio_data": user.studio_data,
         "ai_keys": user.ai_keys
     }
+
 
 
 class UpdateProfileRequest(BaseModel):
