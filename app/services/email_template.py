@@ -28,6 +28,14 @@ def _get_frontend_base() -> str:
     ).rstrip("/")
 
 
+def _get_backend_base() -> str:
+    """Return the canonical backend base URL (no trailing slash)."""
+    return (
+        os.getenv("BACKEND_URL")
+        or getattr(settings, "BACKEND_URL", "http://localhost:8000")
+    ).rstrip("/")
+
+
 def _render_creator_forge_logo_html(size: int = 28) -> str:
     """
     Renders the official Creator Forge 4-node geometric symbol using pure HTML tables.
@@ -166,7 +174,7 @@ def _render_single_concept_block(
 ) -> str:
     """
     Renders a single concept as a clean, plain text-style block for a professional 1-on-1 email.
-    No dark UI, no newsletter-style cards. Includes a direct landing page link per concept.
+    No dark UI, no newsletter-style cards, includes embedded concept image and direct landing page link.
     """
     app_name = concept.get("name") or concept.get("title") or f"Software Concept {index + 1}"
     tagline = concept.get("tagline") or concept.get("summary") or ""
@@ -185,14 +193,23 @@ def _render_single_concept_block(
     key_features = concept.get("keyFeatures") or concept.get("features") or []
     landing_url = _build_concept_landing_url(concept, creator_name, index)
 
-    contact_email = get_contact_reply_email()
-    token_suffix = f" {tracking_token}" if tracking_token else ""
-    mailto_subject = urllib.parse.quote(f"Interested in Concept {index + 1}: {app_name}{token_suffix}")
-    mailto_body = urllib.parse.quote(
-        f"I would be interested in Concept {index + 1} ({app_name}). "
-        f"Let's discuss building and launching this together.{token_suffix}"
+    # Resolve concept preview image
+    mockup = concept.get("mockup") if isinstance(concept.get("mockup"), dict) else {}
+    concept_img = (
+        concept.get("customImageUrl")
+        or concept.get("imageUrl")
+        or concept.get("image_url")
+        or concept.get("mockup_url")
+        or mockup.get("imageUrl")
+        or mockup.get("previewUrl")
+        or ""
     )
-    mailto_url = f"mailto:{contact_email}?subject={mailto_subject}&body={mailto_body}"
+    if isinstance(concept_img, str) and concept_img.strip():
+        concept_img = concept_img.strip()
+        if concept_img.startswith("/"):
+            concept_img = f"{_get_frontend_base()}{concept_img}"
+    else:
+        concept_img = ""
 
     features_html = ""
     if key_features and isinstance(key_features, list):
@@ -220,6 +237,16 @@ def _render_single_concept_block(
             f'{html.escape(tagline)}</div>'
         )
 
+    img_html = ""
+    if concept_img:
+        img_html = (
+            f'<div style="margin:12px 0 14px 0;">'
+            f'<img src="{html.escape(concept_img)}" alt="{html.escape(app_name)} preview" width="540" '
+            f'style="width:100%;max-width:540px;height:auto;border-radius:8px;'
+            f'border:1px solid #e2e8f0;display:block;" />'
+            f'</div>'
+        )
+
     return (
         '<table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">'
         '<tr><td style="padding:18px 20px;background:#f8fafc;border:1px solid #e2e8f0;'
@@ -229,6 +256,7 @@ def _render_single_concept_block(
         f'<div style="font-size:17px;font-weight:700;color:#0f172a;margin-bottom:4px;">'
         f'{html.escape(app_name)}</div>'
         f'{tagline_html}'
+        f'{img_html}'
         f'{problem_html}'
         f'{features_html}'
         '<table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top:10px;">'
@@ -238,16 +266,10 @@ def _render_single_concept_block(
         f'Opportunity score: <strong style="color:#16a34a;">{score}/100</strong>'
         '</td></tr></table>'
         '<div style="margin-top:12px;padding-top:10px;border-top:1px solid #e2e8f0;">'
-        '<div style="font-size:13px;color:#475569;margin-bottom:6px;">Landing page preview:</div>'
+        '<div style="font-size:13px;color:#475569;margin-bottom:4px;">Landing page preview:</div>'
         f'<a href="{landing_url}" target="_blank" '
         'style="display:inline-block;font-size:13px;color:#0284c7;text-decoration:underline;word-break:break-all;">'
         f'{html.escape(landing_url)}</a>'
-        '</div>'
-        '<div style="margin-top:12px;">'
-        f'<a href="{mailto_url}" '
-        'style="display:inline-block;padding:8px 16px;background:#0f172a;color:#ffffff;'
-        f'font-size:13px;font-weight:600;text-decoration:none;border-radius:5px;">'
-        f'I am interested in Concept {index + 1}</a>'
         '</div>'
         '</td></tr></table>'
     )
@@ -262,7 +284,7 @@ def render_concept_showcase_html(
     """
     Renders a clean, professional concept section for Step 5 & Step 6 emails.
     Plain text-style blocks — no dark UI, no newsletter styling.
-    Includes a landing page link under each concept.
+    Includes a landing page link and concept image under each concept.
     """
     if not concepts and not concept_image_url:
         return ""
@@ -293,24 +315,12 @@ def render_concept_showcase_html(
         for idx, c in enumerate(concept_list)
     )
 
-    contact_reply_to = get_contact_reply_email()
-
     cta_html = (
-        '<table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:8px 0 24px 0;">'
-        '<tr><td style="padding:16px 20px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;">'
-        '<div style="font-size:14px;font-weight:700;color:#14532d;margin-bottom:6px;">How to move forward</div>'
-        '<p style="margin:0 0 10px 0;font-size:14px;color:#334155;line-height:1.6;">'
-        'Under our 50/50 partnership, CoLaunch covers 100% of engineering, hosting, payment infrastructure, '
-        'and MVP deployment at zero financial cost to you. To move forward, simply reply to this email with '
-        'your preferred concept number.</p>'
-        '<div style="font-size:13px;color:#475569;padding:10px 14px;background:#ffffff;'
-        'border:1px solid #d1fae5;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'
-        'Example reply: "I would be interested in Concept 1"</div>'
-        '<div style="margin-top:10px;font-size:13px;color:#64748b;">'
-        'Or reply directly to this email at: '
-        f'<a href="mailto:{contact_reply_to}" style="color:#0284c7;text-decoration:underline;">'
-        f'{html.escape(contact_reply_to)}</a></div>'
-        '</td></tr></table>'
+        '<div style="margin:20px 0 8px 0;font-size:14px;color:#334155;line-height:1.6;">'
+        'Under our 50/50 partnership, our engineering team handles 100% of product development, '
+        'cloud hosting, billing infrastructure, and ongoing technical support with zero upfront cost to you.<br><br>'
+        'To discuss these concepts, refine any direction, or explore an idea of your own, simply reply directly to this email.'
+        '</div>'
     )
 
     return header_html + cards_html + cta_html
@@ -319,8 +329,9 @@ def render_concept_showcase_html(
 def convert_markdown_to_clean_html(markdown_text: str) -> str:
     """
     Converts markdown text to clean, email-safe HTML with inline CSS.
-    Handles headings, bold, italics, links, lists, blockquotes.
-    No emojis are injected — the input is rendered as-is.
+    Handles headings, bold, italics, links, lists, blockquotes, and embedded images.
+    Blockquotes are styled as clean highlighted personal notes.
+    No promotional buttons or emojis are injected.
     """
     if not markdown_text:
         return ""
@@ -359,23 +370,6 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         normalized_lines.append(line)
 
     clean_md = "\n".join(normalized_lines)
-
-    url_match = re.search(r'(https?://[^\s<"\']+)', clean_md)
-    cta_btn_html = ""
-    if url_match:
-        raw_url = url_match.group(1).rstrip(".,)")
-        is_portal = any(k in raw_url.lower() for k in ["portal", "launch", "preview", "project", "review"])
-        cta_label = "Access Co-Founder Portal" if is_portal else "Review Software Concepts"
-        cta_btn_html = (
-            '<div style="margin:20px 0 12px 0;">'
-            f'<a href="{raw_url}" target="_blank" '
-            'style="display:inline-block;padding:10px 20px;background:#0f172a;color:#ffffff;'
-            f'font-size:14px;font-weight:600;text-decoration:none;border-radius:6px;">{cta_label}</a>'
-            '<div style="margin-top:6px;font-size:12px;color:#64748b;'
-            'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'
-            f'Direct link: <a href="{raw_url}" style="color:#0284c7;text-decoration:underline;">{raw_url}</a>'
-            '</div></div>'
-        )
 
     raw_html = markdown.markdown(
         clean_md,
@@ -427,12 +421,43 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         r'<li style="margin-bottom:5px;line-height:1.6;color:#1e293b;font-size:15px;">\1</li>',
         raw_html, flags=re.DOTALL
     )
+
+    # Style blockquotes as highlighted personal note boxes
+    def _style_blockquote(match):
+        inner_content = match.group(1).strip()
+        # Clean inner <p> tags
+        inner_content = re.sub(r'</?p[^>]*>', '', inner_content).strip()
+        return (
+            '<div style="margin:16px 0;padding:12px 18px;background:#f8fafc;border:1px solid #e2e8f0;'
+            'border-left:4px solid #0284c7;border-radius:6px;color:#1e293b;font-size:14px;line-height:1.6;">'
+            f'{inner_content}</div>'
+        )
+
     raw_html = re.sub(
-        r'<blockquote>\s*<p>(.*?)</p>\s*</blockquote>',
-        r'<blockquote style="margin:14px 0;padding:10px 14px;border-left:3px solid #cbd5e1;'
-        r'color:#475569;font-size:14px;line-height:1.6;font-style:italic;">\1</blockquote>',
+        r'<blockquote>(.*?)</blockquote>',
+        _style_blockquote,
         raw_html, flags=re.DOTALL
     )
+
+    # Style embedded images
+    def _style_img_tag(match):
+        attrs = match.group(1)
+        src_m = re.search(r'src="([^"]+)"', attrs)
+        alt_m = re.search(r'alt="([^"]+)"', attrs)
+        src = src_m.group(1) if src_m else ""
+        alt = alt_m.group(1) if alt_m else "Concept preview"
+        if src.startswith("/"):
+            src = f"{_get_frontend_base()}{src}"
+        return (
+            f'<div style="margin:14px 0 18px 0;">'
+            f'<img src="{html.escape(src)}" alt="{html.escape(alt)}" width="540" '
+            f'style="width:100%;max-width:540px;height:auto;border-radius:8px;'
+            f'border:1px solid #e2e8f0;display:block;box-shadow:0 1px 3px rgba(0,0,0,0.05);" />'
+            f'</div>'
+        )
+
+    raw_html = re.sub(r'<img\s+([^>]+)/?>', _style_img_tag, raw_html)
+
     raw_html = re.sub(
         r'<hr\s*/?>',
         r'<hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0;">',
@@ -449,9 +474,6 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         r'background:#f1f5f9;color:#0f172a;border:1px solid #e2e8f0;padding:1px 5px;border-radius:3px;">\1</code>',
         raw_html
     )
-
-    if cta_btn_html and "Access Co-Founder Portal" not in raw_html:
-        raw_html = f"{raw_html}\n{cta_btn_html}"
 
     return raw_html
 
@@ -472,10 +494,11 @@ def format_luxury_html_email(
 
     Produces a clean, plain professional 1-on-1 email — not a newsletter.
     - White background, standard text sizing, natural paragraph flow
-    - No heavy card UI, no dark backgrounds, no emojis injected by the formatter
-    - Concept blocks are clean bordered sections with direct landing page links
+    - No heavy card UI, no dark backgrounds, no promotional buttons or spam triggers
+    - Highlighted personal notes for research basis and total flexibility
+    - Embedded concept preview images
     - Responsive for mobile (max-width 620px)
-    - High deliverability: all styles inline, no webfonts, no external images
+    - High deliverability: all styles inline, no webfonts, standard email clients compatible
     """
     clean_body, extracted_token = _clean_and_extract_ref_tokens(body_text)
     active_token = tracking_token or extracted_token
@@ -485,27 +508,38 @@ def format_luxury_html_email(
 
     formatted_body_html = convert_markdown_to_clean_html(clean_body)
 
-    active_concepts = concepts
-    if not active_concepts and (concept_title or concept_image_url):
-        active_concepts = [{
-            "name": concept_title or "Custom Creator SaaS",
-            "tagline": "Tailored software engineered for your audience",
-            "imageUrl": concept_image_url,
-            "mockup": {
-                "previewUrl": concept_image_url,
-                "appUrl": f"{creator_name.lower().replace(' ', '')}app.io" if creator_name else "creatorstudio.app"
-            },
-            "revenueModel": "$29/month Tiered Subscription",
-            "pricing": {"creatorSplit": "50% Net Co-Founder Share"},
-            "coreFeatures": ["Tailored Audience Workflow", "Automated Creator Monetisation"]
-        }]
-
-    concept_card_html = render_concept_showcase_html(
-        concepts=active_concepts,
-        concept_image_url=concept_image_url,
-        creator_name=creator_name,
-        tracking_token=active_token
+    # Check if the email body already presents the concepts to prevent duplicate concept listings
+    has_concepts_in_body = bool(
+        re.search(
+            r'(?:1\.\s+\*\*|1\.\s+[A-Z]|landing page:|concept 1|what it is:|opportunity score)',
+            clean_body,
+            re.IGNORECASE
+        )
     )
+
+    concept_card_html = ""
+    if not has_concepts_in_body:
+        active_concepts = concepts
+        if not active_concepts and (concept_title or concept_image_url):
+            active_concepts = [{
+                "name": concept_title or "Custom Creator SaaS",
+                "tagline": "Tailored software engineered for your audience",
+                "imageUrl": concept_image_url,
+                "mockup": {
+                    "previewUrl": concept_image_url,
+                    "appUrl": f"{creator_name.lower().replace(' ', '')}app.io" if creator_name else "creatorstudio.app"
+                },
+                "revenueModel": "$29/month Tiered Subscription",
+                "pricing": {"creatorSplit": "50% Net Co-Founder Share"},
+                "coreFeatures": ["Tailored Audience Workflow", "Automated Creator Monetisation"]
+            }]
+
+        concept_card_html = render_concept_showcase_html(
+            concepts=active_concepts,
+            concept_image_url=concept_image_url,
+            creator_name=creator_name,
+            tracking_token=active_token
+        )
 
     signature_html = _render_executive_signature_html(creator_name, active_token)
 

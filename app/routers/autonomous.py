@@ -1356,10 +1356,19 @@ Generate a comprehensive JSON object with:
    - "mvpDifficulty": "Low (2 weeks)" or "Medium (3 weeks)"
    - "opportunityScore": Integer 90-98
    - "mockupType": MUST be "saas_os" for Concept 1, "ai_copilot" for Concept 2, "knowledge_hub" for Concept 3 (each concept MUST have a distinct visual archetype)
-   - "mockup": {{"appUrl": "...", "primaryStat": "...", "primaryMetric": "$18.5K MRR", "activeMetric": "850", "efficiencyMetric": "94%", "accentColor": "emerald/cyan/amber/lime"}}
 3. "pitch_email":
    - "subject": "Software concepts tailored for @{c_handle}"
-   - "body": Professional 1-on-1 plain text email presenting the 3 concepts with pricing and 50/50 terms. Under EACH concept, include its landing page URL: "{frontend_base}/preorder/{c_handle}?concept=<concept-slug>". Strictly DO NOT use any emojis. Sign off professionally as "Alex Rivera\nHead of Venture Partnerships, CoLaunch".
+   - "body": Professional, authentic 1-on-1 personal email from Alex Rivera (NOT a newsletter - newsletters get flagged). Must include:
+     1. Natural personal opening addressing the creator by first name.
+     2. A highlighted blockquote note emphasizing that the concepts are based on an analysis of their channel videos, recurring questions in comments, and community discussions:
+        "> **Audience Research Note:** These 3 software concepts were architected directly from an in-depth analysis of your channel videos, recurring questions in your comments, and discussions across your community. They are built around real demand your audience has already demonstrated."
+     3. The 3 concepts clearly presented with name, pricing, tagline, what problem it solves, landing page URL ("{frontend_base}/preorder/{c_handle}?concept=<concept-slug>"), and an image embed markdown line for each concept: "![<Concept Name> Preview](<imageUrl>)".
+     4. Clear explanation of our 50/50 partnership terms (engineering covers 100% of development, hosting, billing, and support at zero cost/risk to creator).
+     5. A highlighted blockquote note emphasizing total creative flexibility:
+        "> **100% Flexible:** If you'd like to adjust any of these concepts, explore additional directions, or if you have an idea of your own you'd love to build for your community, we'd love to hear it. You maintain full creative control, and our engineering team is here to bring your vision to life."
+     6. Normal human invitation asking them to reply directly to this email with their thoughts.
+     7. Strictly NO emojis, NO promotional newsletter buttons, NO marketing jargon.
+     8. Sign off: "Best regards,\nAlex Rivera\nHead of Venture Partnerships, CoLaunch".
 
 Return valid JSON only matching the structure above."""
 
@@ -1579,15 +1588,26 @@ Return valid JSON only matching the structure above."""
             "subject": f"Software concepts tailored for @{c_handle}",
             "body": (
                 f"Hi {first_name},\n\n"
-                f"Following up on our partnership discussion. Based on our analysis of your {niche} audience on {platform}, here are the top 3 software product concepts we designed for your community:\n\n"
-                f"1. {first_name} OS ($29-$79/mo) — The all-in-one automated operating system for {niche} professionals (Score: 96/100)\n"
-                f"   • Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-os\n\n"
-                f"2. {first_name} Flow AI ($39-$99/mo) — AI-powered workflow assistant tailored for {niche} (Score: 93/100)\n"
-                f"   • Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-flow-ai\n\n"
-                f"3. {first_name} Pro Hub ($49-$149/mo) — Private software toolkit & deal network (Score: 89/100)\n"
-                f"   • Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-pro-hub\n\n"
-                f"Under our 50/50 partnership, our engineering team handles 100% of product development, hosting, billing, and technical support at zero financial cost to you.\n\n"
-                f"Please review the landing page previews above and let us know which concept you prefer. To move forward, simply reply to this email with: \"I will be interested in Concept 1\" (or Concept 2, Concept 3).\n\n"
+                f"Following up on our partnership discussion. Based on our research on your {niche} content and community on {platform}, here are the top 3 software product concepts we engineered for your audience:\n\n"
+                f"> **Audience Research Note:** These 3 software concepts were architected directly from an in-depth analysis of your channel videos, recurring questions in your comments, and community discussions. They are built around real demand your audience has already demonstrated.\n\n"
+                f"1. **{first_name} OS** ($29-$79/mo)\n"
+                f"• Tagline: The all-in-one automated operating system for {niche} professionals\n"
+                f"• Solves: Eliminates 10+ hours of manual administrative overhead per week\n"
+                f"• Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-os\n\n"
+                f"![{first_name} OS Preview](https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=1000&auto=format&fit=crop&q=80)\n\n"
+                f"2. **{first_name} Flow AI** ($39-$99/mo)\n"
+                f"• Tagline: AI-powered workflow assistant tailored specifically for {niche}\n"
+                f"• Solves: Bridges the gap between generic AI tools and specialized domain workflows\n"
+                f"• Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-flow-ai\n\n"
+                f"![{first_name} Flow AI Preview](https://images.unsplash.com/photo-1677442136019-21780ecad995?w=1000&auto=format&fit=crop&q=80)\n\n"
+                f"3. **{first_name} Pro Hub** ($49-$149/mo)\n"
+                f"• Tagline: Private software toolkit, deal network, and resource vault\n"
+                f"• Solves: Gives serious practitioners high-signal mentorship, curated templates, and verified deal flow\n"
+                f"• Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-pro-hub\n\n"
+                f"![{first_name} Pro Hub Preview](https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=1000&auto=format&fit=crop&q=80)\n\n"
+                f"Under our 50/50 partnership, our engineering team handles 100% of product development, cloud hosting, billing infrastructure, and ongoing technical support with zero financial cost or risk to you.\n\n"
+                f"> **100% Flexible:** If you'd like to adjust any of these concepts, explore additional directions, or if you already have an idea of your own you'd love to build for your community, we are completely open to it. You maintain full creative control, and our engineering team is here to bring your vision to life.\n\n"
+                f"Let me know which concept resonates most with you, or if you'd like us to draft more ideas or look into your own concept. You can simply reply directly to this email.\n\n"
                 f"Best regards,\n"
                 f"Alex Rivera\nHead of Venture Partnerships, CoLaunch"
             )
