@@ -605,7 +605,7 @@ def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:
         "avatar_url": avatar_url,
         "email_public": email_public,
         "profile_url": f"https://www.youtube.com/@{clean}",
-        "niche": ["Tech"],
+        "niche": [],
         "website": website,
         "external_urls": external_urls,
         "social_links": [],
@@ -646,24 +646,6 @@ def scrape_youtube(handle: str, deep: bool = False) -> dict:
     if tube_res:
         result.update(tube_res)
 
-    # Guess niche from bio keywords
-    bio_lower = (result.get("bio") or "").lower()
-    niche_map = {
-        "fitness": ["fitness", "workout", "gym", "health", "exercise"],
-        "cooking": ["cook", "recipe", "food", "kitchen", "chef"],
-        "tech": ["tech", "software", "coding", "developer", "programming", "ai", "automation"],
-        "finance": ["finance", "invest", "money", "wealth", "stock"],
-        "gaming": ["gaming", "gamer", "twitch", "esport", "playthrough"],
-        "beauty": ["beauty", "makeup", "skincare", "cosmetic"],
-        "travel": ["travel", "explore", "adventure", "nomad"],
-        "education": ["learn", "teach", "tutorial", "course", "education"],
-        "lifestyle": ["lifestyle", "vlog", "daily", "routine"],
-        "business": ["entrepreneur", "business", "startup", "founder"],
-    }
-    for tag, keywords in niche_map.items():
-        if any(k in bio_lower for k in keywords) and tag not in result["niche"]:
-            result["niche"].append(tag)
-
     # Step 2: Fetch real video uploads via YouTube RSS feed & Innertube only if deep=True
     if deep:
         cid = result.get("channel_id") or ""
@@ -675,6 +657,32 @@ def scrape_youtube(handle: str, deep: bool = False) -> dict:
         result["recent_posts"] = []
         result["recentPosts"] = []
         result["videos"] = []
+
+    # Guess niche from channel title, handle, bio, and video titles
+    vid_titles = " ".join((v.get("title") or "") for v in result.get("recent_posts", []))
+    combined_text = f"{result.get('display_name', '')} {result.get('handle', '')} {result.get('bio', '')} {vid_titles}".lower()
+
+    niche_patterns = {
+        "entertainment": [r"\bentertainment\b", r"\bchallenge\b", r"\bchallenges\b", r"\bcomedy\b", r"\bfunny\b", r"\bbeast\b", r"\bmrbeast\b", r"\bstunt\b", r"\bprank\b", r"\bviral\b", r"\bgiveaway\b"],
+        "gaming": [r"\bgaming\b", r"\bgamer\b", r"\btwitch\b", r"\besport\b", r"\bplaythrough\b", r"\bgameplay\b", r"\bminecraft\b", r"\broblox\b"],
+        "fitness": [r"\bfitness\b", r"\bworkout\b", r"\bgym\b", r"\bhealth\b", r"\bexercise\b", r"\bcrossfit\b"],
+        "cooking": [r"\bcooking\b", r"\brecipe\b", r"\brecipes\b", r"\bkitchen\b", r"\bchef\b", r"\bbaking\b"],
+        "tech": [r"\btechnology\b", r"\bsoftware\b", r"\bcoding\b", r"\bdeveloper\b", r"\bprogramming\b", r"\bautomation\b", r"\bgadgets?\b"],
+        "finance": [r"\bfinance\b", r"\binvesting\b", r"\bwealth\b", r"\bcrypto\b", r"\bstocks?\b", r"\breal estate\b"],
+        "beauty": [r"\bbeauty\b", r"\bmakeup\b", r"\bskincare\b", r"\bcosmetics?\b", r"\bfashion\b"],
+        "travel": [r"\btravel\b", r"\bnomad\b", r"\badventure\b", r"\bexploring\b"],
+        "education": [r"\beducation\b", r"\btutorials?\b", r"\bcourse\b", r"\bdocumentary\b", r"\bscience\b"],
+        "business": [r"\bentrepreneur\b", r"\bbusiness\b", r"\bstartup\b", r"\bfounder\b"],
+    }
+    detected_niches = []
+    for tag, patterns in niche_patterns.items():
+        if any(re.search(pat, combined_text) for pat in patterns):
+            detected_niches.append(tag)
+
+    if detected_niches:
+        result["niche"] = detected_niches
+    elif not result.get("niche"):
+        result["niche"] = ["entertainment"] if result.get("follower_count", 0) > 100_000 else ["creator"]
 
     return result
 
