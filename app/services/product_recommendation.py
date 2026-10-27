@@ -32,7 +32,22 @@ def _calculate_follower_revenue_guidance(followers: int) -> str:
         return f"strictly scale to a mega audience of {f:,} followers, e.g. $2M-$10M+ ARR"
 
 
-def _calibrate_revenue_for_followers(raw_rev: str, category: str, followers: int) -> str:
+def _calibrate_revenue_for_followers(arg1, category: str = "course", arg2 = None) -> str:
+    # Allow calling as either (followers, category, raw_rev) or (raw_rev, category, followers)
+    if isinstance(arg1, (int, float)):
+        followers = int(arg1)
+        raw_rev = str(arg2 or "")
+    elif isinstance(arg2, (int, float)):
+        followers = int(arg2)
+        raw_rev = str(arg1 or "")
+    else:
+        try:
+            followers = int(arg1)
+            raw_rev = str(arg2 or "")
+        except (ValueError, TypeError):
+            followers = 0
+            raw_rev = str(arg1 or "")
+
     f = max(50, followers or 0)
     cat = (category or "").lower()
 

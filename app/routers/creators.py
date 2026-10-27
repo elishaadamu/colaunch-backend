@@ -1157,7 +1157,9 @@ def generate_products(
         recs = product_recommendation.generate_recommendations(
             db, creator_id, actor=actor, custom_keys=custom_keys or None
         )
-        return [_rec_dict(r) for r in recs]
+        creator = db.get(Creator, creator_id)
+        f_count = creator.follower_count if creator else 0
+        return [_rec_dict(r, f_count) for r in recs]
     except ValueError as e:
         status_code = 404 if "not found" in str(e).lower() else 400
         raise HTTPException(status_code, str(e))
@@ -1211,7 +1213,7 @@ def generate_pitch_package(creator_id: str, actor: str = "internal", db: Session
 
     return {
         "creator": _creator_dict(creator),
-        "recommendation": _rec_dict(rec),
+        "recommendation": _rec_dict(rec, creator.follower_count or 0),
         "deck": {"id": deck.id, "title": deck.title, "slides": deck.slides, "version": deck.version},
         "email_draft": email_draft,
         "contacts": [_contact_dict(c) for c in contacts],
@@ -1656,11 +1658,14 @@ def _creator_dict(c: Any, project_map: dict = None) -> dict:
     }
 
 
-def _rec_dict(r) -> dict:
+def _rec_dict(r, followers: int = 0) -> dict:
+    rev = r.revenue_potential
+    if followers > 0:
+        rev = product_recommendation._calibrate_revenue_for_followers(followers, r.product_category, rev)
     return {
         "id": r.id, "product_name": r.product_name, "product_category": r.product_category,
         "tagline": r.tagline, "description": r.description,
-        "revenue_potential": r.revenue_potential, "confidence_score": r.confidence_score,
+        "revenue_potential": rev, "confidence_score": r.confidence_score,
         "status": r.status,
     }
 
