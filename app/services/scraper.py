@@ -193,6 +193,20 @@ def apify_scrape_tiktok_profiles(handles: list, apify_token: str = None, timeout
         bio_link = meta.get("bioLink") or item.get("bioLink") or meta.get("externalUrl") or ""
         website = bio_link.get("link", "") if isinstance(bio_link, dict) else str(bio_link or "")
 
+        raw_videos = item.get("latestPosts") or item.get("videos") or item.get("itemList") or []
+        recent_posts = []
+        for v in (raw_videos if isinstance(raw_videos, list) else []):
+            if isinstance(v, dict):
+                meta = v.get("videoMeta") or {}
+                recent_posts.append({
+                    "title": v.get("text") or v.get("desc") or "",
+                    "thumbnail": meta.get("coverUrl") or v.get("coverUrl") or "",
+                    "url": v.get("webVideoUrl") or "",
+                    "likes": v.get("diggCount") or 0,
+                    "comments": v.get("commentCount") or 0,
+                    "views": v.get("playCount") or 0,
+                })
+
         results.append({
             "handle": clean_h,
             "platform": "tiktok",
@@ -207,6 +221,8 @@ def apify_scrape_tiktok_profiles(handles: list, apify_token: str = None, timeout
             "website_url": website,
             "profile_url": f"https://www.tiktok.com/@{clean_h}",
             "video_count": video_count,
+            "recent_posts": recent_posts,
+            "recentPosts": recent_posts,
             "raw_apify_data": item,
         })
 
@@ -263,6 +279,20 @@ def apify_scrape_instagram_profiles(handles: list, apify_token: str = None, time
         posts_count = int(item.get("postsCount") or item.get("mediaCount") or 0)
         website = item.get("externalUrl") or item.get("websiteUrl") or item.get("website") or ""
 
+        raw_posts = item.get("latestPosts") or item.get("posts") or item.get("edge_owner_to_timeline_media", {}).get("edges", []) or []
+        recent_posts = []
+        for p_item in (raw_posts if isinstance(raw_posts, list) else []):
+            node = p_item.get("node", p_item) if isinstance(p_item, dict) else {}
+            if isinstance(node, dict):
+                recent_posts.append({
+                    "title": node.get("caption") or "",
+                    "thumbnail": node.get("displayUrl") or node.get("thumbnailUrl") or node.get("display_url") or "",
+                    "url": node.get("url") or "",
+                    "likes": node.get("likesCount") or node.get("like_count") or 0,
+                    "comments": node.get("commentsCount") or node.get("comment_count") or 0,
+                    "views": node.get("videoViewCount") or node.get("video_view_count") or 0,
+                })
+
         results.append({
             "handle": clean_h,
             "platform": "instagram",
@@ -277,6 +307,8 @@ def apify_scrape_instagram_profiles(handles: list, apify_token: str = None, time
             "website_url": website,
             "profile_url": f"https://www.instagram.com/{clean_h}",
             "video_count": posts_count,
+            "recent_posts": recent_posts,
+            "recentPosts": recent_posts,
             "raw_apify_data": item,
         })
 
@@ -1427,8 +1459,8 @@ def scrape_profile(platform: str, handle: str, api_key: str = None, apify_token:
     # 1. YouTube: Fast Direct Innertube Scraper (0.8s vs 60s Apify)
     if p == "youtube":
         try:
-            yt_res = scrape_youtube(clean_h)
-            if yt_res and not yt_res.get("error") and (yt_res.get("display_name") or yt_res.get("follower_count")):
+            yt_res = scrape_youtube(clean_h, deep=True)
+            if yt_res and not yt_res.get("error") and (yt_res.get("follower_count", 0) > 0 or yt_res.get("avatar_url")):
                 result = yt_res
         except Exception as yt_err:
             logger.debug(f"[Direct YouTube Scrape] Fallback to Apify: {yt_err}")
@@ -1479,7 +1511,7 @@ def scrape_profile(platform: str, handle: str, api_key: str = None, apify_token:
     # 3. Direct Fallback Scrapers if Apify didn't yield a result
     if not result:
         if p == "youtube":
-            result = scrape_youtube(clean_h)
+            result = scrape_youtube(clean_h, deep=True)
         elif p == "instagram":
             result = scrape_instagram(clean_h)
         elif p == "tiktok":
