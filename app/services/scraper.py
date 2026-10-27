@@ -402,6 +402,8 @@ def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:
     """Fetch live YouTube channel profile data directly using YouTube's Innertube Search and Browse APIs."""
     import urllib.parse
     clean = handle_or_query.lstrip("@").strip()
+    if clean.startswith("channel/"):
+        clean = clean.split("channel/")[1].strip()
     channel_id = clean if clean.startswith("UC") and len(clean) == 24 else None
 
     sub_count = 0
@@ -494,9 +496,18 @@ def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:
                 if not avatar_url and meta.get("avatar", {}).get("thumbnails"):
                     avatar_url = meta["avatar"]["thumbnails"][-1].get("url", "")
 
-                # Extract external links from modern page header
                 ph = b_data.get("header", {}).get("pageHeaderRenderer", {}).get("content", {}).get("pageHeaderViewModel", {})
                 if ph:
+                    # Extract handle & subscriber count from metadataRows
+                    rows = ph.get("metadata", {}).get("contentMetadataViewModel", {}).get("metadataRows", [])
+                    for row in rows:
+                        for part in row.get("metadataParts", []):
+                            txt = part.get("text", {}).get("content", "")
+                            if txt.startswith("@"):
+                                clean = txt.lstrip("@")
+                            if "subscriber" in txt.lower() and sub_count == 0:
+                                sub_count = _num(txt)
+
                     attr = ph.get("attribution", {}).get("attributionViewModel", {})
                     text_content = attr.get("text", {}).get("content", "").strip()
                     if text_content:
@@ -509,6 +520,14 @@ def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:
                                 external_urls.append(parsed_q[0])
                         elif nav_url.startswith("http"):
                             external_urls.append(nav_url)
+
+                c4 = b_data.get("header", {}).get("c4TabbedHeaderRenderer", {})
+                if c4:
+                    if not display_name and c4.get("title"):
+                        display_name = c4.get("title")
+                    sub_text = c4.get("subscriberCountText", {}).get("simpleText", "")
+                    if "subscriber" in sub_text.lower() and sub_count == 0:
+                        sub_count = _num(sub_text)
         except Exception as e:
             logger.debug(f"[YouTube Innertube Browse] Error: {e}")
 
@@ -1435,9 +1454,10 @@ def scrape_profile(platform: str, handle: str, api_key: str = None, apify_token:
     # If full URL passed, extract handle & platform
     if "youtube.com/" in handle:
         p = "youtube"
-        m = re.search(r"youtube\.com/(@?[^/?&\s]+)", handle)
+        m = re.search(r"youtube\.com/(channel/[^/?&\s]+|c/[^/?&\s]+|user/[^/?&\s]+|@[^/?&\s]+|[^/?&\s]+)", handle)
         if m:
-            clean_h = m.group(1).lstrip("@")
+            matched = m.group(1).lstrip("@")
+            clean_h = matched.split("channel/")[1] if "channel/" in matched else matched
     elif "instagram.com/" in handle:
         p = "instagram"
         m = re.search(r"instagram\.com/([^/?&\s]+)", handle)

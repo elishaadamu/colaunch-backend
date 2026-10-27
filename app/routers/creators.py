@@ -281,6 +281,8 @@ def scrape_creator(request: Request, body: ScrapeRequest, actor: str = "internal
         handle = handle.lstrip("@").strip("/")
     else:
         handle = handle.strip("/")
+        if handle.startswith("channel/"):
+            handle = handle.split("channel/")[1].strip()
 
     apify_token = request.headers.get("X-Apify-Token")
     scraped = scrape_profile(platform, handle, apify_token=apify_token)
@@ -288,6 +290,7 @@ def scrape_creator(request: Request, body: ScrapeRequest, actor: str = "internal
         raise HTTPException(400, f"Scrape failed: {scraped['error']}")
 
     creator_data = None
+    
     if body.save:
         try:
             with SessionLocal() as db:
