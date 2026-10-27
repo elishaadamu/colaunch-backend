@@ -85,6 +85,28 @@ def generate_concept_card_image(
     else:
         app_url = raw_url
 
+    # Resolve brand accent color
+    raw_color = concept.get("brandColor") or concept.get("brand_color") or concept.get("accentColor")
+    accent_rgb = (16, 185, 129)  # Default Electric Emerald
+    if raw_color and isinstance(raw_color, str):
+        c_clean = raw_color.strip().lstrip("#")
+        if len(c_clean) == 3:
+            c_clean = "".join(c * 2 for c in c_clean)
+        if len(c_clean) == 6:
+            try:
+                r_c = int(c_clean[0:2], 16)
+                g_c = int(c_clean[2:4], 16)
+                b_c = int(c_clean[4:6], 16)
+                lum = (0.299 * r_c + 0.587 * g_c + 0.114 * b_c) / 255
+                if lum < 0.25:
+                    accent_rgb = (6, 182, 212)  # Ocean Cyan for dark backgrounds
+                else:
+                    accent_rgb = (r_c, g_c, b_c)
+            except ValueError:
+                pass
+
+    mockup_type = str(concept.get("mockupType") or "saas_os").lower()
+
     # Metrics
     mockup_data = concept.get("mockup") if isinstance(concept.get("mockup"), dict) else {}
     mrr = str(
@@ -98,13 +120,13 @@ def generate_concept_card_image(
     active_users = str(
         concept.get("activeMetric")
         or mockup_data.get("activeMetric")
-        or "1,200"
+        or ("1,420 Copilot Runs" if mockup_type == "ai_copilot" else "420 Active" if mockup_type == "knowledge_hub" else "1,200")
     ).strip()
 
     retention = str(
         concept.get("efficiencyMetric")
         or mockup_data.get("efficiencyMetric")
-        or "91%"
+        or ("98% Precision" if mockup_type == "ai_copilot" else "94% Renewal" if mockup_type == "knowledge_hub" else "91%")
     ).strip()
 
     customer = str(
@@ -139,24 +161,25 @@ def generate_concept_card_image(
     # Red, Yellow, Green macOS dots
     draw.ellipse([24 * scale, dot_y - dot_r, 24 * scale + dot_r * 2, dot_y + dot_r], fill=(239, 68, 68))
     draw.ellipse([42 * scale, dot_y - dot_r, 42 * scale + dot_r * 2, dot_y + dot_r], fill=(245, 158, 11))
-    # Architecture Spec title in clean monospace (no URL)
+    # Architecture Spec title in clean monospace
     spec_label = f"{name} • Software Spec"
     draw.text((82 * scale, dot_y - 7 * scale), spec_label, fill=(148, 163, 184, 255), font=font_url)
 
-    # Right Badge: MVP Ready pill
-    badge_w = 90 * scale
+    # Right Badge: Concept Archetype pill (styled with dynamic brand accent)
+    badge_label = "AI Copilot" if mockup_type == "ai_copilot" else "VIP Vault" if mockup_type == "knowledge_hub" else "MVP Ready"
+    badge_w = 98 * scale
     badge_h = 22 * scale
     badge_x = W - pad - 20 * scale - badge_w
     badge_y = dot_y - 11 * scale
-    draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=6 * scale, fill=(4, 44, 28, 255), outline=(5, 150, 105, 255), width=1 * scale)
-    # Green pulse dot inside badge
-    draw.ellipse([badge_x + 9 * scale, badge_y + 8 * scale, badge_x + 15 * scale, badge_y + 14 * scale], fill=(52, 211, 153))
-    draw.text((badge_x + 22 * scale, badge_y + 4 * scale), "MVP Ready", fill=(52, 211, 153), font=font_badge)
+    draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=6 * scale, fill=(*accent_rgb, 35), outline=(*accent_rgb, 180), width=1 * scale)
+    # Dynamic pulse dot inside badge
+    draw.ellipse([badge_x + 9 * scale, badge_y + 8 * scale, badge_x + 15 * scale, badge_y + 14 * scale], fill=(*accent_rgb, 255))
+    draw.text((badge_x + 20 * scale, badge_y + 4 * scale), badge_label, fill=(*accent_rgb, 255), font=font_badge)
 
     # Chrome bottom divider
     draw.line([(pad + 12 * scale, 48 * scale), (W - pad - 12 * scale, 48 * scale)], fill=(30, 41, 59, 255), width=1 * scale)
 
-    # 3. Center Simulated Product Interface Canvas (Matching s2!)
+    # 3. Center Simulated Product Interface Canvas
     dash_x1 = 20 * scale
     dash_y1 = 58 * scale
     dash_x2 = W - 20 * scale
@@ -166,11 +189,11 @@ def generate_concept_card_image(
 
     # Mini App Header Bar inside canvas (y = dash_y1 to dash_y1 + 42 * scale)
     hdr_y = dash_y1 + 10 * scale
-    # Avatar circle on left
+    # Avatar circle on left with creator signature brand color
     av_r = 13 * scale
     av_x = dash_x1 + 16 * scale
     av_y = hdr_y + 3 * scale
-    draw.ellipse([av_x, av_y, av_x + av_r * 2, av_y + av_r * 2], fill=(22, 163, 74, 255))
+    draw.ellipse([av_x, av_y, av_x + av_r * 2, av_y + av_r * 2], fill=(*accent_rgb, 255))
     initial_char = (name[0] if name else "C").upper()
     font_av = _get_font(12 * scale, is_bold=True)
     draw.text((av_x + 8 * scale, av_y + 5 * scale), initial_char, fill=(255, 255, 255, 255), font=font_av)
@@ -179,14 +202,15 @@ def generate_concept_card_image(
     font_app_name = _get_font(13 * scale, is_bold=True)
     draw.text((av_x + av_r * 2 + 10 * scale, hdr_y + 7 * scale), name, fill=(255, 255, 255, 255), font=font_app_name)
 
-    # Right badge: Live Workspace
-    ws_w = 110 * scale
+    # Right badge: Live Workspace / Copilot / Vault
+    ws_label = "AI Copilot Engine" if mockup_type == "ai_copilot" else "VIP Mastermind Vault" if mockup_type == "knowledge_hub" else "Live Workspace"
+    ws_w = 125 * scale
     ws_h = 24 * scale
     ws_x = dash_x2 - 16 * scale - ws_w
     ws_y = hdr_y + 4 * scale
-    draw.rounded_rectangle([ws_x, ws_y, ws_x + ws_w, ws_y + ws_h], radius=6 * scale, fill=(15, 23, 42, 255), outline=(30, 41, 59, 255), width=1 * scale)
-    font_ws = _get_font(10 * scale, is_mono=True)
-    draw.text((ws_x + 12 * scale, ws_y + 5 * scale), "Live Workspace", fill=(148, 163, 184, 255), font=font_ws)
+    draw.rounded_rectangle([ws_x, ws_y, ws_x + ws_w, ws_y + ws_h], radius=6 * scale, fill=(15, 23, 42, 255), outline=(*accent_rgb, 120), width=1 * scale)
+    font_ws = _get_font(9 * scale, is_mono=True)
+    draw.text((ws_x + 10 * scale, ws_y + 6 * scale), ws_label, fill=(*accent_rgb, 255), font=font_ws)
 
     # Divider under header
     hdr_div_y = dash_y1 + 44 * scale
@@ -196,17 +220,31 @@ def generate_concept_card_image(
     body_y1 = hdr_div_y + 10 * scale
     body_y2 = dash_y2 - 12 * scale
 
-    # Left Sidebar (Dash / Tasks / Flows)
+    # Left Sidebar (Dash / Tasks / Flows tailored by archetype)
     side_w = 125 * scale
     side_x1 = dash_x1 + 12 * scale
     side_x2 = side_x1 + side_w
     draw.rounded_rectangle([side_x1, body_y1, side_x2, body_y2], radius=10 * scale, fill=(15, 23, 42, 230), outline=(30, 41, 59, 255), width=1 * scale)
 
-    nav_items = [
-        ("Dash", (52, 211, 153), True),      # Emerald
-        ("Tasks", (251, 191, 36), False),    # Amber
-        ("Flows", (148, 163, 184), False),   # Slate
-    ]
+    if mockup_type == "ai_copilot":
+        nav_items = [
+            ("Copilot", (*accent_rgb,), True),
+            ("Prompts", (251, 191, 36), False),
+            ("Outputs", (148, 163, 184), False),
+        ]
+    elif mockup_type == "knowledge_hub":
+        nav_items = [
+            ("Vault", (*accent_rgb,), True),
+            ("Calls", (251, 191, 36), False),
+            ("Presets", (148, 163, 184), False),
+        ]
+    else:
+        nav_items = [
+            ("Dash", (*accent_rgb,), True),
+            ("Tasks", (251, 191, 36), False),
+            ("Flows", (148, 163, 184), False),
+        ]
+
     font_nav = _get_font(11 * scale, is_bold=True)
     nav_h = (body_y2 - body_y1) / 3
     for idx, (label, color, is_active) in enumerate(nav_items):
@@ -214,17 +252,18 @@ def generate_concept_card_image(
         draw.ellipse([side_x1 + 16 * scale, ny + 4 * scale, side_x1 + 24 * scale, ny + 12 * scale], fill=color)
         draw.text((side_x1 + 32 * scale, ny), label, fill=(241, 245, 249) if is_active else (148, 163, 184), font=font_nav)
 
-    # Right Chart Area (MRR Trajectory + glowing curve)
+    # Right Chart Area (MRR Trajectory + glowing curve styled with dynamic brand accent)
     chart_x1 = side_x2 + 12 * scale
     chart_x2 = dash_x2 - 12 * scale
     draw.rounded_rectangle([chart_x1, body_y1, chart_x2, body_y2], radius=10 * scale, fill=(11, 15, 23, 240), outline=(30, 41, 59, 255), width=1 * scale)
 
     # Chart Header: MRR Trajectory (left), +38.4% (right)
     chart_hdr_y = body_y1 + 12 * scale
-    draw.text((chart_x1 + 16 * scale, chart_hdr_y), "MRR Trajectory", fill=(148, 163, 184, 255), font=_get_font(11 * scale, is_bold=True))
-    draw.text((chart_x2 - 76 * scale, chart_hdr_y), "+38.4%", fill=(52, 211, 153, 255), font=_get_font(12 * scale, is_bold=True, is_mono=True))
+    chart_title = "Copilot Efficiency" if mockup_type == "ai_copilot" else "Mastermind MRR" if mockup_type == "knowledge_hub" else "MRR Trajectory"
+    draw.text((chart_x1 + 16 * scale, chart_hdr_y), chart_title, fill=(148, 163, 184, 255), font=_get_font(11 * scale, is_bold=True))
+    draw.text((chart_x2 - 76 * scale, chart_hdr_y), "+38.4%", fill=(*accent_rgb, 255), font=_get_font(12 * scale, is_bold=True, is_mono=True))
 
-    # Glowing Emerald Area Curve
+    # Glowing Area Curve in creator's dynamic brand accent
     chart_base_y = body_y2 - 34 * scale
     chart_top_y = body_y1 + 46 * scale
     chart_span_w = chart_x2 - chart_x1 - 32 * scale
@@ -247,18 +286,18 @@ def generate_concept_card_image(
         poly_pts.append((px, py))
     poly_pts.append((chart_x1 + 16 * scale + chart_span_w, chart_base_y))
 
-    # Fill polygon with emerald glow
-    draw.polygon(poly_pts, fill=(22, 163, 74, 55))
+    # Fill polygon with dynamic brand glow
+    draw.polygon(poly_pts, fill=(*accent_rgb, 50))
 
     sub_poly = [(chart_x1 + 16 * scale, chart_base_y)]
     for px, py in curve_points:
         sub_poly.append((px, py + (chart_base_y - py) * 0.45))
     sub_poly.append((chart_x1 + 16 * scale + chart_span_w, chart_base_y))
-    draw.polygon(sub_poly, fill=(22, 163, 74, 35))
+    draw.polygon(sub_poly, fill=(*accent_rgb, 28))
 
-    # Draw vibrant emerald curve stroke (3px thick)
+    # Draw vibrant accent curve stroke (3px thick)
     for i in range(len(curve_points) - 1):
-        draw.line([curve_points[i], curve_points[i + 1]], fill=(52, 211, 153, 255), width=3 * scale)
+        draw.line([curve_points[i], curve_points[i + 1]], fill=(*accent_rgb, 255), width=3 * scale)
 
     # Bottom labels: Launch Day (left) ... Target (right)
     chart_ftr_y = body_y2 - 20 * scale
@@ -278,7 +317,7 @@ def generate_concept_card_image(
     c1_x2 = c1_x1 + col_w
     draw.rounded_rectangle([c1_x1, cards_y1, c1_x2, cards_y2], radius=12 * scale, fill=(15, 23, 42, 255), outline=(30, 41, 59, 255), width=1 * scale)
     draw.text((c1_x1 + 18 * scale, cards_y1 + 12 * scale), "MRR PROJECTED", fill=(148, 163, 184, 255), font=font_metric_label)
-    draw.text((c1_x1 + 18 * scale, cards_y1 + 34 * scale), mrr, fill=(52, 211, 153, 255), font=font_metric_val)
+    draw.text((c1_x1 + 18 * scale, cards_y1 + 34 * scale), mrr, fill=(*accent_rgb, 255), font=font_metric_val)
 
     # Metric 2: Active Users
     c2_x1 = c1_x2 + 12 * scale
@@ -302,9 +341,9 @@ def generate_concept_card_image(
     # Target customer on left
     draw.text((24 * scale, footer_text_y), customer, fill=(148, 163, 184, 255), font=font_footer_cust)
 
-    # Pricing on right (emerald monospace)
+    # Pricing on right (styled with dynamic brand accent)
     pricing_w = draw.textlength(pricing, font=font_footer_price) if hasattr(draw, "textlength") else 160 * scale
-    draw.text((W - pad - 24 * scale - pricing_w, footer_text_y), pricing, fill=(52, 211, 153, 255), font=font_footer_price)
+    draw.text((W - pad - 24 * scale - pricing_w, footer_text_y), pricing, fill=(*accent_rgb, 255), font=font_footer_price)
 
     # Convert to PNG buffer
     output_buf = io.BytesIO()

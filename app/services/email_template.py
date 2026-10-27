@@ -265,11 +265,12 @@ def _render_single_concept_block(
         '&nbsp;&nbsp;|&nbsp;&nbsp;'
         f'Opportunity score: <strong style="color:#16a34a;">{score}/100</strong>'
         '</td></tr></table>'
-        '<div style="margin-top:12px;padding-top:10px;border-top:1px solid #e2e8f0;">'
-        '<div style="font-size:13px;color:#475569;margin-bottom:4px;">Landing page preview:</div>'
+        '<div style="margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;">'
         f'<a href="{landing_url}" target="_blank" '
-        'style="display:inline-block;font-size:13px;color:#0284c7;text-decoration:underline;word-break:break-all;">'
-        f'{html.escape(landing_url)}</a>'
+        'style="display:inline-block;padding:9px 18px;background:#0f172a;color:#ffffff;'
+        'text-decoration:none;font-weight:700;font-size:13px;border-radius:6px;margin-bottom:6px;">'
+        '👉 Review Live Concept &amp; Landing Page &rarr;</a>'
+        f'<div style="font-size:12px;color:#64748b;word-break:break-all;">Direct landing page link: <a href="{landing_url}" target="_blank" style="color:#0284c7;text-decoration:underline;">{html.escape(landing_url)}</a></div>'
         '</div>'
         '</td></tr></table>'
     )
@@ -468,6 +469,26 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         r'<a href="\1" target="_blank" style="color:#0284c7;text-decoration:underline;">\2</a>',
         raw_html
     )
+
+    # Style Landing Page preview links as clean CTA buttons with secondary direct URL
+    def _style_landing_page_cta(m):
+        prefix = m.group(1)
+        url = m.group(2)
+        return (
+            f'<div style="margin:12px 0 16px 0;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid #0f172a;border-radius:6px;">'
+            f'<div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Interactive Concept Preview</div>'
+            f'<a href="{url}" target="_blank" style="display:inline-block;padding:8px 16px;background:#0f172a;color:#ffffff;text-decoration:none;font-weight:700;font-size:13px;border-radius:6px;margin-bottom:6px;">👉 Review Live Concept &amp; Landing Page &rarr;</a>'
+            f'<div style="font-size:12px;color:#64748b;word-break:break-all;">Direct link: <a href="{url}" target="_blank" style="color:#0284c7;text-decoration:underline;">{url}</a></div>'
+            f'</div>'
+        )
+
+    raw_html = re.sub(
+        r'(?:<p>|<li>)?(?:•\s*)?(?:Live\s+)?Landing\s+Page:\s*<a\s+href="([^"]+)"[^>]*>(.*?)</a>(?:</p>|</li>)?',
+        _style_landing_page_cta,
+        raw_html,
+        flags=re.IGNORECASE
+    )
+
     raw_html = re.sub(
         r'<code>(.*?)</code>',
         r'<code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;'

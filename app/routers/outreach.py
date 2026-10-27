@@ -29,12 +29,14 @@ def render_dynamic_concept_card(
     active_users: str = "1,200",
     retention: str = "91%",
     customer: str = "Overwhelmed high-achiever/creators",
-    pricing: str = "$49/mo Starter / $99/mo Pro"
+    pricing: str = "$49/mo Starter / $99/mo Pro",
+    brand_color: Optional[str] = None,
+    mockup_type: str = "saas_os"
 ):
     """
     Renders dynamic concept text into an authentic macOS dark-mode concept card PNG.
     Allows dynamic text from the AI or admin modifications to be converted into
-    a visual concept image and sent directly in emails.
+    a visual concept image and sent directly in emails with the creator's detected brand color.
     """
     concept_data = {
         "name": name,
@@ -43,7 +45,9 @@ def render_dynamic_concept_card(
         "activeMetric": active_users,
         "efficiencyMetric": retention,
         "customer": customer,
-        "pricing": pricing
+        "pricing": pricing,
+        "brandColor": brand_color,
+        "mockupType": mockup_type
     }
     png_bytes = generate_concept_card_image(concept_data)
     return Response(
