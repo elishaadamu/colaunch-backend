@@ -28,19 +28,29 @@ app = FastAPI(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # ── CORS (allow Vite dev server + Vercel frontend) ───────────────────────────
+_cors_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "https://creator-forge-frontend.vercel.app",
+    "https://creator-forge-frontend.vercel.app/",
+    "https://colaunch-web.vercel.app",
+    "https://colaunch-web.vercel.app/",
+]
+if settings.FRONTEND_URL:
+    clean_fe = settings.FRONTEND_URL.rstrip("/")
+    if clean_fe not in _cors_origins:
+        _cors_origins.extend([clean_fe, f"{clean_fe}/"])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-        "https://creator-forge-frontend.vercel.app",
-    ],
-    allow_origin_regex="https://.*\\.vercel\\.app",
+    allow_origins=_cors_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app/?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 import asyncio
