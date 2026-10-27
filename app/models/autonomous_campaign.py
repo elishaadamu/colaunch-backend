@@ -50,8 +50,8 @@ class AutonomousCampaign(Base):
             "• \"I'm interested, let's go ahead with the process\" — and I'll send over the 3 custom software concepts and revenue roadmap.\n"
             "• Or \"I am not interested, sorry\" — and I will immediately close your file with zero follow-ups.\n\n"
             "Best regards,\n"
-            "Alex Rivera\n"
-            "Head of Venture Partnerships · Creator Forge"
+            "CoLaunch Venture Partnerships\n"
+            "Venture Partnerships · CoLaunch"
         ),
     )
 

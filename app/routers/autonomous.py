@@ -44,8 +44,8 @@ class CampaignCreateSchema(BaseModel):
         "• \"I'm interested, let's go ahead with the process\" — and I'll send over the 3 custom software concepts and revenue roadmap.\n"
         "• Or \"I am not interested, sorry\" — and I will immediately close your file with zero follow-ups.\n\n"
         "Best regards,\n"
-        "Alex Rivera\n"
-        "Head of Venture Partnerships · Creator Forge"
+        "CoLaunch Venture Partnerships\n"
+        "Venture Partnerships · CoLaunch"
     )
     followup_template_subject: str = "Re: Co-founder partnership inquiry for {{display_name}}"
     followup_template_body: str = (
@@ -1358,7 +1358,7 @@ Generate a comprehensive JSON object with:
    - "mockupType": MUST be "saas_os" for Concept 1, "ai_copilot" for Concept 2, "knowledge_hub" for Concept 3 (each concept MUST have a distinct visual archetype)
 3. "pitch_email":
    - "subject": "Software concepts tailored for @{c_handle}"
-   - "body": Professional, authentic 1-on-1 personal email from Alex Rivera (NOT a newsletter - newsletters get flagged). Must include:
+   - "body": Professional, authentic 1-on-1 personal email from CoLaunch Partnerships (NOT a newsletter - newsletters get flagged). Must include:
      1. Natural personal opening addressing the creator by first name.
      2. A highlighted blockquote note emphasizing that the concepts are based on an analysis of their channel videos, recurring questions in comments, and community discussions:
         "> **Audience Research Note:** These 3 software concepts were architected directly from an in-depth analysis of your channel videos, recurring questions in your comments, and discussions across your community. They are built around real demand your audience has already demonstrated."
@@ -1368,7 +1368,7 @@ Generate a comprehensive JSON object with:
         "> **100% Flexible:** If you'd like to adjust any of these concepts, explore additional directions, or if you have an idea of your own you'd love to build for your community, we'd love to hear it. You maintain full creative control, and our engineering team is here to bring your vision to life."
      6. Normal human invitation asking them to reply directly to this email with their thoughts.
      7. Strictly NO emojis, NO promotional newsletter buttons, NO marketing jargon.
-     8. Sign off: "Best regards,\nAlex Rivera\nHead of Venture Partnerships, CoLaunch".
+     8. Sign off: "Best regards,\nCoLaunch Venture Partnerships\nHead of Venture Partnerships, CoLaunch".
 
 Return valid JSON only matching the structure above."""
 
@@ -1609,7 +1609,7 @@ Return valid JSON only matching the structure above."""
                 f"> **100% Flexible:** If you'd like to adjust any of these concepts, explore additional directions, or if you already have an idea of your own you'd love to build for your community, we are completely open to it. You maintain full creative control, and our engineering team is here to bring your vision to life.\n\n"
                 f"Let me know which concept resonates most with you, or if you'd like us to draft more ideas or look into your own concept. You can simply reply directly to this email.\n\n"
                 f"Best regards,\n"
-                f"Alex Rivera\nHead of Venture Partnerships, CoLaunch"
+                f"CoLaunch Venture Partnerships\nHead of Venture Partnerships, CoLaunch"
             )
         }
     }
