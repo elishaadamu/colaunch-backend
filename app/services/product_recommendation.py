@@ -16,6 +16,93 @@ from app.models.creator import Analysis, Creator, ProductRecommendation
 from app.services import audit as audit_svc
 
 
+def _calculate_follower_revenue_guidance(followers: int) -> str:
+    f = max(50, followers or 0)
+    if f < 5_000:
+        return f"strictly scale to a micro-audience of {f:,} followers, e.g. $4k-$20k ARR"
+    elif f < 25_000:
+        return f"strictly scale to a growing audience of {f:,} followers, e.g. $20k-$75k ARR"
+    elif f < 100_000:
+        return f"strictly scale to an established audience of {f:,} followers, e.g. $60k-$220k ARR"
+    elif f < 500_000:
+        return f"strictly scale to a mid-tier audience of {f:,} followers, e.g. $200k-$800k ARR"
+    elif f < 2_000_000:
+        return f"strictly scale to a macro audience of {f:,} followers, e.g. $600k-$2.5M ARR"
+    else:
+        return f"strictly scale to a mega audience of {f:,} followers, e.g. $2M-$10M+ ARR"
+
+
+def _calibrate_revenue_for_followers(raw_rev: str, category: str, followers: int) -> str:
+    f = max(50, followers or 0)
+    cat = (category or "").lower()
+
+    if any(k in cat for k in ["course", "saas", "academy", "masterclass"]):
+        low_mult = 0.55
+        high_mult = 2.20
+    elif any(k in cat for k in ["community", "membership", "hub"]):
+        low_mult = 0.40
+        high_mult = 1.65
+    elif any(k in cat for k in ["app", "mobile"]):
+        low_mult = 0.32
+        high_mult = 1.35
+    else:
+        low_mult = 0.20
+        high_mult = 0.90
+
+    low_arr = int(f * low_mult)
+    high_arr = int(f * high_mult)
+
+    if f < 2_000:
+        low_arr = max(2_000, low_arr)
+        high_arr = max(8_000, high_arr)
+    elif f < 10_000:
+        low_arr = max(6_000, low_arr)
+        high_arr = max(28_000, high_arr)
+    elif f < 50_000:
+        low_arr = max(22_000, low_arr)
+        high_arr = max(95_000, high_arr)
+    elif f < 250_000:
+        low_arr = max(65_000, low_arr)
+        high_arr = max(260_000, high_arr)
+    elif f < 1_000_000:
+        low_arr = max(160_000, low_arr)
+        high_arr = max(700_000, high_arr)
+    elif f < 5_000_000:
+        low_arr = max(550_000, low_arr)
+        high_arr = max(2_400_000, high_arr)
+    else:
+        low_arr = max(1_800_000, low_arr)
+        high_arr = max(9_000_000, high_arr)
+
+    def _fmt(val: int) -> str:
+        if val >= 1_000_000:
+            m = val / 1_000_000
+            return f"${m:.1f}M".replace(".0M", "M")
+        if val >= 1_000:
+            k = val / 1_000
+            return f"${k:.0f}k"
+        return f"${val}"
+
+    # Check if raw_rev has reasonable numbers already that align with the tier
+    if raw_rev and ("$" in raw_rev or "k" in raw_rev.lower() or "m" in raw_rev.lower()):
+        nums = re.findall(r"\$?\s*([\d\.]+\s*[kmbKMB]?)", raw_rev)
+        if len(nums) >= 2:
+            def _p(s):
+                s = s.lower().replace("$", "").strip()
+                if "m" in s: return float(s.replace("m","")) * 1_000_000
+                if "k" in s: return float(s.replace("k","")) * 1_000
+                if "b" in s: return float(s.replace("b","")) * 1_000_000_000
+                try: return float(s)
+                except: return 0
+            n1 = _p(nums[0])
+            n2 = _p(nums[1])
+            # If AI estimated roughly within 0.25x - 3.5x of our benchmark, accept AI's estimate
+            if n1 > 0 and n2 > 0 and 0.25 * low_arr <= n1 <= 3.5 * high_arr:
+                return f"{_fmt(int(n1))}-{_fmt(int(n2))}"
+
+    return f"{_fmt(low_arr)}-{_fmt(high_arr)}"
+
+
 def _build_product_prompt(creator: Creator, analysis: Optional[Analysis]) -> str:
     demand_signals = ""
     pain_points = ""
@@ -23,11 +110,14 @@ def _build_product_prompt(creator: Creator, analysis: Optional[Analysis]) -> str
         demand_signals = json.dumps(analysis.audience_demand_signals or {}, indent=2)
         pain_points = "\n".join(f"  - {p}" for p in (analysis.audience_pain_points or []))
 
+    f_count = creator.follower_count or 0
+    rev_guidance = _calculate_follower_revenue_guidance(f_count)
+
     return f"""You are a product strategist helping identify the BEST business/product to build for a creator.
 
 Creator Profile:
 - Name: {creator.display_name} (@{creator.handle}) on {creator.platform}
-- Followers: {creator.follower_count:,}
+- Followers: {f_count:,}
 - Niche: {', '.join(creator.niche or []) or 'unknown'}
 - Bio: {creator.bio or 'N/A'}
 
@@ -46,7 +136,7 @@ Return a JSON array with exactly 3 items, each with:
   "description": "<2-3 sentence description>",
   "target_audience": "<who this serves>",
   "revenue_model": "<how it makes money>",
-  "revenue_potential": "<estimated ARR range like $200k-$1M>",
+  "revenue_potential": "<estimated realistic revenue range that {rev_guidance}>",
   "rationale": "<why this fits this creator specifically>",
   "confidence_score": <float 0-1>
 }}
@@ -107,6 +197,11 @@ def generate_recommendations(
 
     recs = []
     for item in items:
+        calibrated_rev = _calibrate_revenue_for_followers(
+            item.get("revenue_potential", ""),
+            item.get("product_category", "other"),
+            creator.follower_count or 0
+        )
         rec = ProductRecommendation(
             creator_id=creator_id,
             product_name=item.get("product_name", "Unnamed Product"),
@@ -115,7 +210,7 @@ def generate_recommendations(
             description=item.get("description", ""),
             target_audience=item.get("target_audience", ""),
             revenue_model=item.get("revenue_model", ""),
-            revenue_potential=item.get("revenue_potential", ""),
+            revenue_potential=calibrated_rev,
             rationale=item.get("rationale", ""),
             confidence_score=float(item.get("confidence_score", 0.5)),
             status="draft",
