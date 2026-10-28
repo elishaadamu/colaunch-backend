@@ -636,6 +636,7 @@ def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:
         "handle": clean,
         "channel_id": channel_id or "",
         "platform": "youtube",
+        "name": display_name or clean,
         "display_name": display_name or clean,
         "bio": bio,
         "follower_count": sub_count,
