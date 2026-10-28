@@ -349,7 +349,11 @@ def proxy_avatar(url: str):
         return Response(
             content=r.content,
             media_type=content_type,
-            headers={"Cache-Control": "public, max-age=86400"},
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+            },
         )
     except Exception:
         return Response(status_code=404)
