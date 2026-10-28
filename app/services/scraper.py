@@ -414,7 +414,31 @@ def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:
     website = ""
     external_urls = []
 
-    # Step 1: Search via Innertube to resolve channel_id, handle canonical, and subscriber count
+    # Step 1: Resolve channel_id directly via navigation/resolve_url (exact, zero ambiguity)
+    if not channel_id:
+        try:
+            target_url = f"https://www.youtube.com/@{clean}" if not clean.startswith("http") else clean
+            nav_payload = {
+                "context": {
+                    "client": {
+                        "hl": "en",
+                        "gl": "US",
+                        "clientName": "WEB",
+                        "clientVersion": "2.20240401.01.00",
+                    }
+                },
+                "url": target_url,
+            }
+            r_nav = _http_post("https://www.youtube.com/youtubei/v1/navigation/resolve_url", json=nav_payload, timeout=4.0)
+            if r_nav.status_code == 200:
+                nav_data = r_nav.json()
+                resolved_id = nav_data.get("endpoint", {}).get("browseEndpoint", {}).get("browseId")
+                if resolved_id and resolved_id.startswith("UC") and len(resolved_id) == 24:
+                    channel_id = resolved_id
+        except Exception as e:
+            logger.debug(f"[YouTube Innertube resolve_url] Error: {e}")
+
+    # Fallback search if resolve_url did not find a direct channel ID
     if not channel_id:
         search_url = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
         payload = {
@@ -440,32 +464,45 @@ def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:
                     .get("sectionListRenderer", {})
                     .get("contents", [])
                 )
+                candidate_channels = []
                 for section in items:
                     renderers = section.get("itemSectionRenderer", {}).get("contents", [])
                     for item in renderers:
                         ch = item.get("channelRenderer")
                         if ch:
-                            channel_id = ch.get("channelId")
-                            canonical = ch.get("canonicalBaseUrl", "").lstrip("/").lstrip("@")
-                            if canonical:
-                                clean = canonical
-                            title = ch.get("title", {}).get("simpleText") or "".join(r.get("text", "") for r in ch.get("title", {}).get("runs", []))
-                            if title:
-                                display_name = title
+                            candidate_channels.append(ch)
 
-                            sub_text = ch.get("videoCountText", {}).get("simpleText") or ""
-                            if "subscriber" not in sub_text.lower():
-                                sub_text = ch.get("subscriberCountText", {}).get("simpleText") or ""
-                            sub_count = _num(sub_text)
-
-                            thumbs = ch.get("thumbnail", {}).get("thumbnails", [])
-                            if thumbs:
-                                avatar_url = thumbs[-1].get("url", "")
-                            desc = "".join(r.get("text", "") for r in ch.get("descriptionSnippet", {}).get("runs", []))
-                            bio = desc
-                            break
-                    if channel_id:
+                # Prioritize channel that exactly matches handle or title
+                matched_ch = None
+                clean_lower = clean.lower()
+                for ch in candidate_channels:
+                    c_handle = (ch.get("subscriberCountText", {}).get("simpleText") or "").lower().replace("@", "")
+                    c_title = (ch.get("title", {}).get("simpleText") or "").lower()
+                    c_canon = (ch.get("canonicalBaseUrl") or "").lower().replace("@", "").strip("/")
+                    if clean_lower in (c_handle, c_canon) or c_title == clean_lower:
+                        matched_ch = ch
                         break
+
+                selected_ch = matched_ch or (candidate_channels[0] if candidate_channels else None)
+                if selected_ch:
+                    channel_id = selected_ch.get("channelId")
+                    canonical = selected_ch.get("canonicalBaseUrl", "").lstrip("/").lstrip("@")
+                    if canonical:
+                        clean = canonical
+                    title = selected_ch.get("title", {}).get("simpleText") or "".join(r.get("text", "") for r in selected_ch.get("title", {}).get("runs", []))
+                    if title:
+                        display_name = title
+
+                    sub_text = selected_ch.get("videoCountText", {}).get("simpleText") or ""
+                    if "subscriber" not in sub_text.lower():
+                        sub_text = selected_ch.get("subscriberCountText", {}).get("simpleText") or ""
+                    sub_count = _num(sub_text)
+
+                    thumbs = selected_ch.get("thumbnail", {}).get("thumbnails", [])
+                    if thumbs:
+                        avatar_url = thumbs[-1].get("url", "")
+                    desc = "".join(r.get("text", "") for r in selected_ch.get("descriptionSnippet", {}).get("runs", []))
+                    bio = desc
         except Exception as e:
             logger.debug(f"[YouTube Innertube Search] Error: {e}")
 
@@ -714,7 +751,21 @@ def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> 
     clean_h = clean.lstrip("@").strip()
     channel_id = clean_h if clean_h.startswith("UC") and len(clean_h) == 24 else None
 
-    # Step 1: If channel_id is not already known, resolve it via YouTube channel page or search
+    # Step 1: If channel_id is not already known, resolve it via resolve_url or channel page
+    if not channel_id:
+        try:
+            nav_payload = {
+                "context": {"client": {"hl": "en", "gl": "US", "clientName": "WEB", "clientVersion": "2.20240401.01.00"}},
+                "url": f"https://www.youtube.com/@{clean_h}",
+            }
+            r_nav = _http_post("https://www.youtube.com/youtubei/v1/navigation/resolve_url", json=nav_payload, timeout=4.0)
+            if r_nav.status_code == 200:
+                cid = r_nav.json().get("endpoint", {}).get("browseEndpoint", {}).get("browseId")
+                if cid and cid.startswith("UC") and len(cid) == 24:
+                    channel_id = cid
+        except Exception:
+            pass
+
     if not channel_id:
         try:
             r_page = _http_get(f"https://www.youtube.com/@{clean_h}", timeout=4.0)
@@ -790,12 +841,13 @@ def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> 
                         "views": views_fmt,
                         "description": v_desc[:250],
                         "thumbnail": v_thumb,
+                        "duration": "Video",
                         "publishedAt": pub_date
                     })
         except Exception as rss_err:
             logger.debug(f"[YouTube Video RSS] Error: {rss_err}")
 
-    # Step 3: If RSS didn't return videos, try Innertube browse API
+    # Step 3: If RSS didn't return videos, try Innertube browse API (handles modern lockupViewModel and legacy videoRenderer)
     if not videos and channel_id:
         try:
             b_payload = {
@@ -818,7 +870,36 @@ def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> 
                     grid = tab.get("tabRenderer", {}).get("content", {}).get("richGridRenderer", {})
                     items = grid.get("contents", [])
                     for item in items:
-                        vr = item.get("richItemRenderer", {}).get("content", {}).get("videoRenderer", {})
+                        rich_item = item.get("richItemRenderer", {}).get("content", {})
+                        
+                        # Modern lockupViewModel (2024-2026 YouTube Desktop)
+                        lk = rich_item.get("lockupViewModel")
+                        if lk and lk.get("contentId"):
+                            vid_id = lk["contentId"]
+                            meta = lk.get("metadata", {}).get("lockupMetadataViewModel", {})
+                            v_title = meta.get("title", {}).get("content") or "Video Upload"
+                            meta_rows = meta.get("metadata", {}).get("contentMetadataViewModel", {}).get("metadataRows", [])
+                            row_texts = [p.get("text", {}).get("content", "") for r in meta_rows for p in r.get("metadataParts", [])]
+                            v_views = row_texts[0] if row_texts else "Verified upload"
+                            
+                            sources = lk.get("contentImage", {}).get("thumbnailViewModel", {}).get("image", {}).get("sources", [])
+                            v_thumb = sources[-1].get("url", "") if sources else f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg"
+                            
+                            videos.append({
+                                "id": vid_id,
+                                "videoId": vid_id,
+                                "title": v_title,
+                                "url": f"https://www.youtube.com/watch?v={vid_id}",
+                                "views": v_views,
+                                "description": "",
+                                "thumbnail": v_thumb,
+                                "duration": "Video"
+                            })
+                            if len(videos) >= limit:
+                                break
+
+                        # Legacy videoRenderer fallback
+                        vr = rich_item.get("videoRenderer", {})
                         if vr and vr.get("videoId"):
                             vid_id = vr["videoId"]
                             v_title = vr.get("title", {}).get("runs", [{}])[0].get("text") or vr.get("title", {}).get("simpleText") or "Video Upload"
@@ -835,6 +916,7 @@ def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> 
                                 "views": v_views,
                                 "description": v_desc[:250],
                                 "thumbnail": v_thumb,
+                                "duration": vr.get("lengthText", {}).get("simpleText", "Video"),
                                 "publishedAt": vr.get("publishedTimeText", {}).get("simpleText", "")
                             })
                             if len(videos) >= limit:
