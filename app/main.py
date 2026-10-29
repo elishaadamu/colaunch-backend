@@ -596,6 +596,7 @@ class SignupRequest(BaseModel):
     calendar_data: Optional[Dict[str, Any]] = None
     launch_pack_data: Optional[Dict[str, Any]] = None
     studio_data: Optional[Dict[str, Any]] = None
+    chat_data: Optional[Dict[str, Any]] = None
 
 class LoginRequest(BaseModel):
     identifier: str
@@ -607,6 +608,7 @@ class SyncRequest(BaseModel):
     calendar_data: Optional[Dict[str, Any]] = None
     launch_pack_data: Optional[Dict[str, Any]] = None
     studio_data: Optional[Dict[str, Any]] = None
+    chat_data: Optional[Dict[str, Any]] = None
 
 @app.post("/api/auth/signup")
 def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
@@ -634,7 +636,8 @@ def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
         creator_data=req.creator_data,
         calendar_data=req.calendar_data,
         launch_pack_data=req.launch_pack_data,
-        studio_data=req.studio_data
+        studio_data=req.studio_data,
+        chat_data=req.chat_data
     )
     db.add(user)
     db.commit()
@@ -653,7 +656,8 @@ def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
                     "creator_data": req.creator_data,
                     "calendar_data": req.calendar_data,
                     "launch_pack_data": req.launch_pack_data,
-                    "studio_data": req.studio_data
+                    "studio_data": req.studio_data,
+                    "chat_data": req.chat_data
                 },
                 upsert=True
             )
@@ -667,7 +671,8 @@ def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
         "creator_data": user.creator_data,
         "calendar_data": user.calendar_data,
         "launch_pack_data": user.launch_pack_data,
-        "studio_data": user.studio_data
+        "studio_data": user.studio_data,
+        "chat_data": user.chat_data
     }
 
 @app.post("/api/auth/login")
@@ -693,6 +698,7 @@ def auth_login(req: LoginRequest, db: Session = Depends(get_db)):
                     calendar_data=m_user.get("calendar_data"),
                     launch_pack_data=m_user.get("launch_pack_data"),
                     studio_data=m_user.get("studio_data"),
+                    chat_data=m_user.get("chat_data"),
                     ai_keys=m_user.get("ai_keys")
                 )
                 db.add(user)
@@ -710,6 +716,7 @@ def auth_login(req: LoginRequest, db: Session = Depends(get_db)):
         "calendar_data": user.calendar_data,
         "launch_pack_data": user.launch_pack_data,
         "studio_data": user.studio_data,
+        "chat_data": user.chat_data,
         "ai_keys": user.ai_keys  # Return saved AI keys if user consented
     }
 
@@ -743,6 +750,8 @@ def auth_sync(req: SyncRequest, db: Session = Depends(get_db)):
         user.launch_pack_data = req.launch_pack_data
     if req.studio_data is not None:
         user.studio_data = req.studio_data
+    if req.chat_data is not None:
+        user.chat_data = req.chat_data
 
     db.commit()
 
@@ -755,12 +764,211 @@ def auth_sync(req: SyncRequest, db: Session = Depends(get_db)):
             if req.calendar_data is not None: update_fields["calendar_data"] = req.calendar_data
             if req.launch_pack_data is not None: update_fields["launch_pack_data"] = req.launch_pack_data
             if req.studio_data is not None: update_fields["studio_data"] = req.studio_data
+            if req.chat_data is not None: update_fields["chat_data"] = req.chat_data
             if update_fields:
                 u_coll.update_one({"username": req.username}, {"$set": update_fields}, upsert=True)
         except Exception:
             pass
 
     return {"status": "success"}
+
+
+# ── Dedicated Chat Persistence Endpoints ─────────────────────────────────────
+
+class SaveChatMessageRequest(BaseModel):
+    handle: str
+    username: Optional[str] = None
+    role: str
+    content: str
+    actions: Optional[List[str]] = None
+    timestamp: Optional[Union[float, int, str]] = None
+
+class SyncChatHistoryRequest(BaseModel):
+    handle: str
+    username: Optional[str] = None
+    messages: List[Dict[str, Any]]
+
+@app.get("/api/chat/messages")
+def get_chat_messages(handle: str, username: Optional[str] = None, db: Session = Depends(get_db)):
+    import time
+    from app.mongodb import get_collection
+    from app.models.creator import ChatMessageRecord, UserProfile
+
+    clean_handle = handle.strip().replace("@", "").lower()
+    messages = []
+    seen_keys = set()
+
+    # 1. Query MongoDB chat_messages
+    c_coll = get_collection("chat_messages")
+    if c_coll is not None:
+        try:
+            query = {"$or": [{"handle": clean_handle}, {"handle": handle.strip()}]}
+            if username:
+                query["$or"].append({"username": username.strip()})
+            cursor = c_coll.find(query).sort("timestamp", 1)
+            for doc in cursor:
+                doc_id = str(doc.get("_id", doc.get("id", "")))
+                role = doc.get("role", "forge")
+                content = doc.get("content", doc.get("text", ""))
+                ts = doc.get("timestamp", doc.get("timestamp_ms", doc.get("created_at")))
+                dedup_key = f"{role}:{content}:{ts}"
+                if dedup_key not in seen_keys and content:
+                    seen_keys.add(dedup_key)
+                    messages.append({
+                        "id": doc_id,
+                        "role": role,
+                        "content": content,
+                        "actions": doc.get("actions"),
+                        "timestamp": ts,
+                        "created_at": doc.get("created_at")
+                    })
+        except Exception as e:
+            print(f"[Chat API] MongoDB fetch error: {e}")
+
+    # 2. Query SQLite ChatMessageRecord as fallback/supplement
+    try:
+        query = db.query(ChatMessageRecord).filter(
+            (ChatMessageRecord.handle == clean_handle) | (ChatMessageRecord.handle == handle.strip())
+        )
+        if username:
+            query = query.filter((ChatMessageRecord.username == username.strip()) | (ChatMessageRecord.handle == clean_handle))
+        records = query.order_by(ChatMessageRecord.created_at.asc()).all()
+        for r in records:
+            ts = r.timestamp_ms or (r.created_at.timestamp() * 1000 if r.created_at else None)
+            dedup_key = f"{r.role}:{r.content}:{ts}"
+            if dedup_key not in seen_keys and r.content:
+                seen_keys.add(dedup_key)
+                messages.append({
+                    "id": r.id,
+                    "role": r.role,
+                    "content": r.content,
+                    "actions": r.actions,
+                    "timestamp": ts,
+                    "created_at": r.created_at.isoformat() if r.created_at else None
+                })
+    except Exception as e:
+        print(f"[Chat API] SQLite fetch error: {e}")
+
+    # 3. If messages is still empty, check user profile's chat_data
+    if not messages and username:
+        try:
+            user = db.query(UserProfile).filter(UserProfile.username == username).first()
+            if user and user.chat_data:
+                for k, v in user.chat_data.items():
+                    if clean_handle in k and isinstance(v, list):
+                        messages = v
+                        break
+        except Exception:
+            pass
+
+    return {"status": "success", "handle": clean_handle, "messages": messages}
+
+@app.post("/api/chat/messages")
+def save_chat_message(req: SaveChatMessageRequest, db: Session = Depends(get_db)):
+    import time
+    import uuid
+    from datetime import datetime
+    from app.mongodb import get_collection
+    from app.models.creator import ChatMessageRecord
+
+    clean_handle = req.handle.strip().replace("@", "").lower()
+    now_dt = datetime.utcnow()
+    now_iso = now_dt.isoformat()
+    now_ms = time.time() * 1000
+    ts = req.timestamp if req.timestamp is not None else now_ms
+
+    msg_id = str(uuid.uuid4())
+    doc = {
+        "id": msg_id,
+        "handle": clean_handle,
+        "username": req.username,
+        "role": req.role,
+        "content": req.content,
+        "actions": req.actions,
+        "timestamp": ts,
+        "created_at": now_iso
+    }
+
+    # 1. MongoDB Atlas
+    c_coll = get_collection("chat_messages")
+    if c_coll is not None:
+        try:
+            c_coll.insert_one(doc.copy())
+        except Exception as e:
+            print(f"[Chat API] MongoDB insert error: {e}")
+
+    # 2. SQLite
+    try:
+        rec = ChatMessageRecord(
+            id=msg_id,
+            handle=clean_handle,
+            username=req.username,
+            role=req.role,
+            content=req.content,
+            actions=req.actions,
+            timestamp_ms=float(ts) if isinstance(ts, (int, float)) else now_ms,
+            created_at=now_dt
+        )
+        db.add(rec)
+        db.commit()
+    except Exception as e:
+        print(f"[Chat API] SQLite insert error: {e}")
+
+    return {"status": "success", "message": doc}
+
+@app.post("/api/chat/sync")
+def sync_chat_history(req: SyncChatHistoryRequest, db: Session = Depends(get_db)):
+    import time
+    import uuid
+    from datetime import datetime
+    from app.mongodb import get_collection
+    from app.models.creator import ChatMessageRecord, UserProfile
+
+    clean_handle = req.handle.strip().replace("@", "").lower()
+    now_ms = time.time() * 1000
+    now_iso = datetime.utcnow().isoformat()
+
+    c_coll = get_collection("chat_messages")
+    if c_coll is not None and req.messages:
+        try:
+            # Upsert each message into MongoDB
+            for m in req.messages:
+                content = m.get("content") or m.get("text") or ""
+                if not content:
+                    continue
+                role = m.get("role", "forge")
+                ts = m.get("timestamp") or m.get("timestamp_ms") or now_ms
+                m_id = str(m.get("id") or uuid.uuid4())
+                c_coll.update_one(
+                    {"handle": clean_handle, "role": role, "content": content},
+                    {"$set": {
+                        "id": m_id,
+                        "handle": clean_handle,
+                        "username": req.username,
+                        "role": role,
+                        "content": content,
+                        "actions": m.get("actions"),
+                        "timestamp": ts,
+                        "created_at": m.get("created_at") or now_iso
+                    }},
+                    upsert=True
+                )
+        except Exception as e:
+            print(f"[Chat API] Bulk sync MongoDB error: {e}")
+
+    # Also update user profile chat_data if username provided
+    if req.username:
+        try:
+            user = db.query(UserProfile).filter(UserProfile.username == req.username).first()
+            if user:
+                current_chat = user.chat_data or {}
+                current_chat[f"forge_{clean_handle}_chat_messages"] = req.messages
+                user.chat_data = current_chat
+                db.commit()
+        except Exception as e:
+            print(f"[Chat API] UserProfile chat_data sync error: {e}")
+
+    return {"status": "success", "count": len(req.messages)}
 
 
 # ── AI Keys Save/Load (user-consented persistence) ────────────────────────────

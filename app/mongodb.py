@@ -48,7 +48,7 @@ def get_mongo_uri() -> str:
 
 SCHEMA_COLLECTIONS = [
     "analyses", "audit_logs", "autonomous_campaigns", "campaigns",
-    "co_launch_projects", "contacts", "content_samples", "creator_campaign_tasks",
+    "chat_messages", "co_launch_projects", "contacts", "content_samples", "creator_campaign_tasks",
     "creators", "decks", "follow_ups", "media_images", "metrics_snapshots",
     "outreach_messages", "partnerships", "post_suggestions", "product_recommendations",
     "replies", "reviews", "suppression_list", "target_niches", "threads",

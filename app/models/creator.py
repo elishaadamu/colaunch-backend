@@ -267,12 +267,26 @@ class UserProfile(Base):
     calendar_data = Column(JSON, nullable=True)
     launch_pack_data = Column(JSON, nullable=True)
     studio_data = Column(JSON, nullable=True)
+    chat_data = Column(JSON, nullable=True)
 
     # Optional: user-consented AI API keys (encrypted at rest in future)
     ai_keys = Column(JSON, nullable=True)
 
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
+class ChatMessageRecord(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    handle = Column(String, nullable=False, index=True)
+    username = Column(String, nullable=True, index=True)
+    role = Column(String, nullable=False) # 'user' or 'forge'
+    content = Column(Text, nullable=False)
+    actions = Column(JSON, nullable=True)
+    timestamp_ms = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=_now)
 
 
 class MediaImage(Base):
