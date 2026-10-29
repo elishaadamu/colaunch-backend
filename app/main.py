@@ -590,8 +590,8 @@ from sqlalchemy.orm import Session
 
 class SignupRequest(BaseModel):
     username: str
-    email: str
-    password: str
+    email: Optional[str] = None
+    password: Optional[str] = None
     creator_data: Optional[Dict[str, Any]] = None
     calendar_data: Optional[Dict[str, Any]] = None
     launch_pack_data: Optional[Dict[str, Any]] = None
@@ -616,32 +616,71 @@ def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
     from fastapi import HTTPException
     from app.mongodb import get_collection
 
-    # Check unique constraints in MongoDB Atlas & DB
     u_coll = get_collection("user_profiles")
+    norm_email = req.email.strip().lower() if (req.email and req.email.strip()) else None
+
+    # Check unique constraints in MongoDB Atlas & DB
     if u_coll is not None:
-        m_existing = u_coll.find_one({"$or": [{"username": req.username}, {"email": req.email}]})
-        if m_existing:
-            raise HTTPException(status_code=400, detail="Username or email already registered")
+        if norm_email:
+            m_existing = u_coll.find_one({"email": norm_email, "username": {"$ne": req.username}})
+            if m_existing:
+                raise HTTPException(status_code=400, detail="Email already registered by another account")
+        m_user = u_coll.find_one({"username": req.username})
+        if m_user:
+            # User already exists in MongoDB, update with latest onboarding payload
+            update_fields = {}
+            if norm_email is not None:
+                update_fields["email"] = norm_email
+            if req.password:
+                update_fields["password"] = req.password
+            if req.creator_data:
+                update_fields["creator_data"] = req.creator_data
+            if req.calendar_data:
+                update_fields["calendar_data"] = req.calendar_data
+            if req.launch_pack_data:
+                update_fields["launch_pack_data"] = req.launch_pack_data
+            if req.studio_data:
+                update_fields["studio_data"] = req.studio_data
+            if req.chat_data:
+                update_fields["chat_data"] = req.chat_data
+            if update_fields:
+                u_coll.update_one({"username": req.username}, {"$set": update_fields})
+            return {
+                "status": "success",
+                "username": req.username,
+                "email": norm_email or m_user.get("email") or "",
+                "creator_data": req.creator_data or m_user.get("creator_data"),
+                "calendar_data": req.calendar_data or m_user.get("calendar_data"),
+                "launch_pack_data": req.launch_pack_data or m_user.get("launch_pack_data"),
+                "studio_data": req.studio_data or m_user.get("studio_data"),
+                "chat_data": req.chat_data or m_user.get("chat_data")
+            }
 
-    existing = db.query(UserProfile).filter(
-        (UserProfile.username == req.username) | (UserProfile.email == req.email)
-    ).first()
+    existing = db.query(UserProfile).filter(UserProfile.username == req.username).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Username or email already registered")
-
-    user = UserProfile(
-        username=req.username,
-        email=req.email,
-        password=req.password,
-        creator_data=req.creator_data,
-        calendar_data=req.calendar_data,
-        launch_pack_data=req.launch_pack_data,
-        studio_data=req.studio_data,
-        chat_data=req.chat_data
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+        if norm_email:
+            existing.email = norm_email
+        if req.password:
+            existing.password = req.password
+        if req.creator_data:
+            existing.creator_data = req.creator_data
+        db.commit()
+        db.refresh(existing)
+        user = existing
+    else:
+        user = UserProfile(
+            username=req.username,
+            email=norm_email or "",
+            password=req.password or "",
+            creator_data=req.creator_data,
+            calendar_data=req.calendar_data,
+            launch_pack_data=req.launch_pack_data,
+            studio_data=req.studio_data,
+            chat_data=req.chat_data
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
 
     # Persist directly into MongoDB Atlas user_profiles
     if u_coll is not None:
@@ -651,8 +690,8 @@ def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
                 {
                     "_id": req.username,
                     "username": req.username,
-                    "email": req.email,
-                    "password": req.password,
+                    "email": norm_email or "",
+                    "password": req.password or "",
                     "creator_data": req.creator_data,
                     "calendar_data": req.calendar_data,
                     "launch_pack_data": req.launch_pack_data,
@@ -680,45 +719,61 @@ def auth_login(req: LoginRequest, db: Session = Depends(get_db)):
     from app.models.creator import UserProfile
     from fastapi import HTTPException
     from app.mongodb import get_collection
+    import re
 
+    ident = req.identifier.strip()
+    ident_lower = ident.lower()
+
+    # Query MongoDB Atlas user_profiles (primary database)
+    u_coll = get_collection("user_profiles")
+    m_user = None
+    if u_coll is not None:
+        m_user = u_coll.find_one({
+            "$or": [
+                {"email": ident_lower},
+                {"username": {"$regex": f"^{re.escape(ident)}$", "$options": "i"}},
+                {"username": ident}
+            ]
+        })
+
+    # Also check SQLite UserProfile
     user = db.query(UserProfile).filter(
-        (UserProfile.username == req.identifier) | (UserProfile.email == req.identifier)
+        (UserProfile.username == ident) | 
+        (UserProfile.email == ident_lower) |
+        (UserProfile.email == ident)
     ).first()
 
-    if not user:
-        u_coll = get_collection("user_profiles")
-        if u_coll is not None:
-            m_user = u_coll.find_one({"$or": [{"username": req.identifier}, {"email": req.identifier}]})
-            if m_user and m_user.get("password") == req.password:
-                user = UserProfile(
-                    username=m_user.get("username"),
-                    email=m_user.get("email"),
-                    password=m_user.get("password"),
-                    creator_data=m_user.get("creator_data"),
-                    calendar_data=m_user.get("calendar_data"),
-                    launch_pack_data=m_user.get("launch_pack_data"),
-                    studio_data=m_user.get("studio_data"),
-                    chat_data=m_user.get("chat_data"),
-                    ai_keys=m_user.get("ai_keys")
-                )
-                db.add(user)
-                db.commit()
-                db.refresh(user)
+    # Verify password against MongoDB user
+    if m_user:
+        stored_pwd = m_user.get("password")
+        if stored_pwd == req.password:
+            return {
+                "status": "success",
+                "username": m_user.get("username"),
+                "email": m_user.get("email") or "",
+                "creator_data": m_user.get("creator_data"),
+                "calendar_data": m_user.get("calendar_data"),
+                "launch_pack_data": m_user.get("launch_pack_data"),
+                "studio_data": m_user.get("studio_data"),
+                "chat_data": m_user.get("chat_data"),
+                "ai_keys": m_user.get("ai_keys")
+            }
 
-    if not user or user.password != req.password:
-        raise HTTPException(status_code=400, detail="Invalid username/email or password credentials.")
+    # Verify password against SQLite user
+    if user and user.password == req.password:
+        return {
+            "status": "success",
+            "username": user.username,
+            "email": user.email,
+            "creator_data": user.creator_data,
+            "calendar_data": user.calendar_data,
+            "launch_pack_data": user.launch_pack_data,
+            "studio_data": user.studio_data,
+            "chat_data": user.chat_data,
+            "ai_keys": user.ai_keys
+        }
 
-    return {
-        "status": "success",
-        "username": user.username,
-        "email": user.email,
-        "creator_data": user.creator_data,
-        "calendar_data": user.calendar_data,
-        "launch_pack_data": user.launch_pack_data,
-        "studio_data": user.studio_data,
-        "chat_data": user.chat_data,
-        "ai_keys": user.ai_keys  # Return saved AI keys if user consented
-    }
+    raise HTTPException(status_code=400, detail="Invalid email/username or password credentials.")
 
 @app.post("/api/auth/sync")
 def auth_sync(req: SyncRequest, db: Session = Depends(get_db)):
@@ -1131,64 +1186,96 @@ def get_user_profile(username: str, db: Session = Depends(get_db)):
 
 class UpdateProfileRequest(BaseModel):
     username: str
-    email: str
+    email: Optional[str] = None
+    password: Optional[str] = None
+    creator_data: Optional[Dict[str, Any]] = None
 
 
 @app.post("/api/auth/update-profile")
 def update_profile(req: UpdateProfileRequest, db: Session = Depends(get_db)):
-    """Update profile email on DB and send alert if changed."""
+    """Update profile email, password, and creator_data on MongoDB Atlas & SQLite."""
     from app.models.creator import UserProfile
     from fastapi import HTTPException
     from app.integrations.email_provider import email_provider
+    from app.mongodb import get_collection
     import logging
 
+    u_coll = get_collection("user_profiles")
+    m_user = u_coll.find_one({"username": req.username}) if u_coll is not None else None
     user = db.query(UserProfile).filter(UserProfile.username == req.username).first()
-    if not user:
+
+    if not user and not m_user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    new_email = req.email.strip().lower()
-    old_email = user.email.strip().lower()
+    mongo_updates = {}
+    new_email = req.email.strip().lower() if (req.email and req.email.strip()) else None
+    old_email = (user.email if user else (m_user.get("email") if m_user else "")) or ""
+    old_email = old_email.strip().lower()
 
-    if new_email != old_email:
-        # Check if email is already taken
-        existing = db.query(UserProfile).filter(UserProfile.email == new_email).first()
+    if new_email and new_email != old_email:
+        # Check if email is already taken in MongoDB Atlas
+        if u_coll is not None:
+            conflict = u_coll.find_one({"email": new_email, "username": {"$ne": req.username}})
+            if conflict:
+                raise HTTPException(status_code=400, detail="Email address already registered by another account")
+        # Check SQLite
+        existing = db.query(UserProfile).filter(
+            (UserProfile.email == new_email) & (UserProfile.username != req.username)
+        ).first()
         if existing:
             raise HTTPException(status_code=400, detail="Email address already registered by another account")
 
-        user.email = new_email
+        if user:
+            user.email = new_email
+        mongo_updates["email"] = new_email
+
+        # Send alert to OLD email address only if it was a real custom email
+        is_dummy_old_email = (
+            not old_email or 
+            old_email == "creatorforgeweb@gmail.com" or 
+            old_email.endswith("@example.com")
+        )
+        if not is_dummy_old_email:
+            subject = "CoLaunch - Security Alert: Email Address Changed"
+            body_text = f"Hello {req.username},\n\nThe email address associated with your CoLaunch account has been updated from {old_email} to {new_email}."
+            body_html = f"""
+            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #1f2937; border-radius: 16px; background-color: #0b0b0b; color: #f3f4f6;">
+                <h2 style="color: #06b6d4;">COLAUNCH SECURITY NOTICE</h2>
+                <p>Hello <strong>{req.username}</strong>,</p>
+                <p>Your account login email was updated to <strong>{new_email}</strong>.</p>
+            </div>
+            """
+            try:
+                email_provider.send(to_email=old_email, subject=subject, body_html=body_html, body_text=body_text)
+            except Exception as e:
+                logging.error(f"Failed to send email change notification: {str(e)}")
+
+    if req.password and req.password.strip():
+        pwd = req.password.strip()
+        if user:
+            user.password = pwd
+        mongo_updates["password"] = pwd
+
+    if req.creator_data is not None:
+        if user:
+            user.creator_data = req.creator_data
+        mongo_updates["creator_data"] = req.creator_data
+
+    # Commit SQLite
+    if user:
         db.commit()
+        db.refresh(user)
 
-        # Send alert to OLD email address
-        subject = "Creator Forge - Security Alert: Email Address Changed"
-        body_text = f"Hello {user.username},\n\nThe email address associated with your Creator Forge account has been successfully changed from {old_email} to {new_email}.\n\nIf you did not authorize this change, please contact support immediately."
-        body_html = f"""
-        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #1f2937; border-radius: 16px; background-color: #0b0b0b; color: #f3f4f6; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-            <div style="text-align: center; margin-bottom: 24px; border-bottom: 1px solid #1f2937; padding-bottom: 16px;">
-                <h1 style="color: #ffffff; font-size: 24px; font-weight: 800; margin: 0; letter-spacing: -0.025em; text-transform: uppercase;">CREATOR FORGE</h1>
-                <p style="color: #ef4444; font-size: 12px; margin: 6px 0 0 0; text-transform: uppercase; letter-spacing: 0.1em; font-weight: bold;">Security Alert</p>
-            </div>
-            <div style="line-height: 1.6; font-size: 14px; color: #d1d5db;">
-                <p style="font-size: 16px; color: #ffffff;">Hello <strong>{user.username}</strong>,</p>
-                <p>The email address associated with your secure operator account has been changed:</p>
-                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 16px; margin: 16px 0; font-family: monospace; font-size: 13px;">
-                    <span style="color: #ef4444;">- Old: {old_email}</span><br>
-                    <span style="color: #10b981;">+ New: {new_email}</span>
-                </div>
-                <p style="color: #9ca3af; font-size: 12px;">If you did not make this change, please contact security immediately.</p>
-            </div>
-        </div>
-        """
-        try:
-            email_provider.send(
-                to_email=old_email,
-                subject=subject,
-                body_html=body_html,
-                body_text=body_text
-            )
-        except Exception as e:
-            logging.error(f"Failed to send email change notification to {old_email}: {str(e)}")
+    # Commit MongoDB Atlas
+    if u_coll is not None and mongo_updates:
+        u_coll.update_one({"username": req.username}, {"$set": mongo_updates}, upsert=True)
 
-    return {"status": "success", "email": new_email}
+    return {
+        "status": "success",
+        "username": req.username,
+        "email": new_email or old_email,
+        "has_password": bool((user and user.password) or (m_user and m_user.get("password")) or req.password)
+    }
 
 
 # ── Admin Control APIs ────────────────────────────────────────────────────────
