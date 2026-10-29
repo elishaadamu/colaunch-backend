@@ -1,5 +1,5 @@
 import app.ssl_patch  # Prevents macOS LibreSSL 2.8.3 TLS 1.3 session ticket double-free crash
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from fastapi import FastAPI, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -798,6 +798,14 @@ def get_chat_messages(handle: str, username: Optional[str] = None, db: Session =
     messages = []
     seen_keys = set()
 
+    def _norm_ts(val):
+        if val is None:
+            return 0
+        try:
+            return int(float(val))
+        except (ValueError, TypeError):
+            return str(val)
+
     # 1. Query MongoDB chat_messages
     c_coll = get_collection("chat_messages")
     if c_coll is not None:
@@ -809,9 +817,9 @@ def get_chat_messages(handle: str, username: Optional[str] = None, db: Session =
             for doc in cursor:
                 doc_id = str(doc.get("_id", doc.get("id", "")))
                 role = doc.get("role", "forge")
-                content = doc.get("content", doc.get("text", ""))
+                content = (doc.get("content") or doc.get("text") or "").strip()
                 ts = doc.get("timestamp", doc.get("timestamp_ms", doc.get("created_at")))
-                dedup_key = f"{role}:{content}:{ts}"
+                dedup_key = f"{role}:{content}:{_norm_ts(ts)}"
                 if dedup_key not in seen_keys and content:
                     seen_keys.add(dedup_key)
                     messages.append({
@@ -835,13 +843,14 @@ def get_chat_messages(handle: str, username: Optional[str] = None, db: Session =
         records = query.order_by(ChatMessageRecord.created_at.asc()).all()
         for r in records:
             ts = r.timestamp_ms or (r.created_at.timestamp() * 1000 if r.created_at else None)
-            dedup_key = f"{r.role}:{r.content}:{ts}"
-            if dedup_key not in seen_keys and r.content:
+            content = (r.content or "").strip()
+            dedup_key = f"{r.role}:{content}:{_norm_ts(ts)}"
+            if dedup_key not in seen_keys and content:
                 seen_keys.add(dedup_key)
                 messages.append({
                     "id": r.id,
                     "role": r.role,
-                    "content": r.content,
+                    "content": content,
                     "actions": r.actions,
                     "timestamp": ts,
                     "created_at": r.created_at.isoformat() if r.created_at else None
@@ -860,6 +869,8 @@ def get_chat_messages(handle: str, username: Optional[str] = None, db: Session =
                         break
         except Exception:
             pass
+
+    messages.sort(key=lambda m: _norm_ts(m.get("timestamp") or 0))
 
     return {"status": "success", "handle": clean_handle, "messages": messages}
 
