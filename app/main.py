@@ -58,6 +58,7 @@ import asyncio
 import logging
 logger = logging.getLogger("creator_forge")
 from app.services.inbox_poller import start_poller_loop, stop_poller_loop
+from app.services.support_inbox_poller import start_support_poller_loop, stop_support_poller_loop
 from app.services.autonomous_outreach import (
     start_autonomous_scheduler_loop, stop_autonomous_scheduler_loop,
     start_followup_scheduler_loop, stop_followup_scheduler_loop,
@@ -74,6 +75,8 @@ async def startup():
     from app.models.autonomous_campaign import AutonomousCampaign
     # Start the IMAP poller loop with reduced frequency (300s) to minimize DB operations
     asyncio.create_task(start_poller_loop(interval_seconds=300))
+    # Start the Customer Support IMAP reply monitor (every 15s)
+    asyncio.create_task(start_support_poller_loop(interval_seconds=15))
     # Autonomous scheduler loops are disabled by default for human control
     if settings.ENABLE_AUTONOMOUS_BACKGROUND_SCHEDULER:
         logger.info("[Autonomous Scheduler] Background loops enabled via configuration.")
@@ -100,6 +103,7 @@ async def startup():
 @app.on_event("shutdown")
 def shutdown():
     stop_poller_loop()
+    stop_support_poller_loop()
     stop_autonomous_scheduler_loop()
     stop_followup_scheduler_loop()
     stop_campaign_schedule_loop()

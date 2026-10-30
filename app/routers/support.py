@@ -14,6 +14,7 @@ from app.models.support import SupportMessage
 from app.mongodb import get_collection, get_mongo_db
 from app.integrations.email_provider import EmailProvider
 from app.services.llm import call_llm
+from app.services.support_inbox_poller import poll_support_email_replies
 
 logger = logging.getLogger("creator_forge.support")
 router = APIRouter(prefix="/api/support", tags=["Customer Support"])
@@ -267,8 +268,29 @@ def get_support_history(
     Returns unified support chat history.
     Can be picked by session_id (during onboarding) or by creator_id (in dashboard).
     """
+    try:
+        poll_support_email_replies()
+    except Exception as e:
+        logger.debug(f"[Support] Instant poller check: {e}")
+
     history = _fetch_history(session_id=session_id, creator_id=creator_id, limit=limit, sql_db=db)
     return {"status": "ok", "count": len(history), "messages": history}
+
+
+@router.post("/sync")
+def sync_support_inbox(
+    session_id: Optional[str] = Query(None),
+    creator_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Explicitly triggers IMAP check for new email replies."""
+    poll_res = {"status": "skipped"}
+    try:
+        poll_res = poll_support_email_replies()
+    except Exception as e:
+        logger.warning(f"[Support] Manual sync error: {e}")
+    history = _fetch_history(session_id=session_id, creator_id=creator_id, limit=50, sql_db=db)
+    return {"status": "ok", "poll": poll_res, "count": len(history), "messages": history}
 
 
 @router.post("/message")
