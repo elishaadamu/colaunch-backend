@@ -104,7 +104,7 @@ RECENT CONVERSATION HISTORY:
 {history_text or 'None recorded.'}
 
 ====================================
-Dispatched via CoLaunch Unified Relay (Brevo & Google SMTP/IMAP).
+Dispatched via CoLaunch Support Operations.
 Admin Inbox: {settings.ADMIN_EMAIL}
 """
 
@@ -277,7 +277,7 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
     User sends a message to Customer Support.
     - Grounded in active creatorData.
     - Answers via Gemini/OpenAI AI LLM.
-    - If user asks for human/admin or questions cannot be answered, escalates via Brevo & Google SMTP to admin.
+    - If user asks for human/admin or questions cannot be answered, escalates to the operations team.
     - Saves all messages to general support_messages table.
     """
     session_id = req.session_id or f"session_{uuid.uuid4().hex[:12]}"
@@ -445,7 +445,7 @@ Guidelines:
 @router.post("/escalate")
 def escalate_to_admin(req: SupportEscalateRequest, db: Session = Depends(get_db)):
     """
-    Manually escalate a creator support thread to human admin via Brevo and Google SMTP.
+    Manually escalate a creator support thread to human operations team.
     """
     session_id = req.session_id or f"session_{uuid.uuid4().hex[:12]}"
     creator_id = req.creator_id or ""
