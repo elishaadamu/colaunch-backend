@@ -524,3 +524,4 @@ def get_support_status():
         "google_smtp_configured": bool(settings.GOOGLE_EMAIL and settings.GOOGLE_APP_PASSWORD),
         "google_email": settings.GOOGLE_EMAIL,
     }
+

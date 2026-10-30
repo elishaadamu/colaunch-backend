@@ -24,3 +24,4 @@ class SupportMessage(Base):
     escalated = Column(Boolean, default=False)
     created_at = Column(DateTime, default=_now, index=True)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
+
