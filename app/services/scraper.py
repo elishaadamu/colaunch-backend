@@ -1027,12 +1027,12 @@ def fetch_youtube_video_comments(video_id_or_url: str, limit: int = 10) -> list[
     return comments[:limit]
 
 
-def fetch_creator_channel_comments(handle_or_id: str, platform: str = "youtube", limit: int = 10) -> list[dict]:
+def fetch_creator_channel_comments(handle_or_id: str, platform: str = "youtube", limit: int = 10, apify_token: str = None) -> list[dict]:
     """
     Fetch genuine audience comments from a creator's channel uploads across platforms.
     If the target is a video ID or URL, fetches comments for that video.
     If it is a creator handle or channel, grabs their latest uploads first and pulls comments.
-    If no real comments exist, returns an empty list without fabrication.
+    Integrates directly with Apify YouTube comments scraper when available.
     """
     if not handle_or_id:
         return []
@@ -1053,6 +1053,28 @@ def fetch_creator_channel_comments(handle_or_id: str, platform: str = "youtube",
 
         clean_handle = target.split("youtube.com/")[-1].split("?")[0].strip("/").lstrip("@")
         videos = fetch_youtube_channel_videos(clean_handle, limit=3)
+
+        # Fallback to Apify channel scraper if videos couldn't be resolved via Innertube
+        from app.config import settings
+        token = apify_token or settings.APIFY_API_KEY
+        if not videos and token:
+            try:
+                ch_items = apify_scrape_youtube_channels([clean_handle], apify_token=token, timeout_secs=30)
+                if ch_items and isinstance(ch_items[0], dict):
+                    raw_apify = ch_items[0].get("raw_apify_data") or {}
+                    ch_vids = raw_apify.get("videos") or raw_apify.get("latestVideos") or []
+                    for v in ch_vids[:3]:
+                        v_id = v.get("id") or v.get("videoId")
+                        if v_id:
+                            videos.append({
+                                "id": v_id,
+                                "videoId": v_id,
+                                "title": v.get("title") or "Channel Upload",
+                                "url": f"https://www.youtube.com/watch?v={v_id}"
+                            })
+            except Exception as e:
+                logger.debug(f"[Apify Videos Fallback] Error: {e}")
+
         if not videos:
             return []
 
@@ -1086,6 +1108,41 @@ def fetch_creator_channel_comments(handle_or_id: str, platform: str = "youtube",
                         break
             if len(all_comments) >= limit:
                 break
+
+        # If Innertube produced no comments, use Apify comments scraper
+        if not all_comments and token:
+            try:
+                actor_id = "streamers~youtube-comments-scraper"
+                v_urls = [vid.get("url") or f"https://www.youtube.com/watch?v={vid.get('videoId')}" for vid in videos[:2] if vid.get("videoId") or vid.get("id")]
+                if not v_urls:
+                    v_urls = [f"https://www.youtube.com/@{clean_handle}"]
+                run_input = {
+                    "startUrls": [{"url": u} for u in v_urls],
+                    "maxComments": limit
+                }
+                apify_items = _apify_run(actor_id, run_input, token, timeout_secs=35)
+                for c in apify_items:
+                    if not isinstance(c, dict):
+                        continue
+                    txt = (c.get("text") or c.get("commentText") or "").strip()
+                    if txt and txt not in seen_texts:
+                        seen_texts.add(txt)
+                        all_comments.append({
+                            "id": c.get("commentId") or c.get("id") or f"apify_{len(all_comments)}",
+                            "author": c.get("authorChannelName") or c.get("authorText") or c.get("author") or "@viewer",
+                            "text": txt,
+                            "quote": txt,
+                            "likes": str(c.get("likesCount") or c.get("likeCount") or "0"),
+                            "published": c.get("publishedTimeText") or "Recent",
+                            "videoId": c.get("videoId") or "",
+                            "videoTitle": c.get("videoTitle") or "Channel Upload",
+                            "videoUrl": c.get("videoUrl") or "",
+                            "source": f"Apify YouTube (@{clean_handle})",
+                        })
+                        if len(all_comments) >= limit:
+                            break
+            except Exception as e:
+                logger.debug(f"[Apify Comments Scraper] Error: {e}")
 
         return all_comments[:limit]
 

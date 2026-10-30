@@ -516,6 +516,7 @@ def get_youtube_videos_endpoint(
 
 @router.get("/youtube-comments")
 def get_youtube_comments_endpoint(
+    request: Request,
     video_id: Optional[str] = None,
     url: Optional[str] = None,
     handle: Optional[str] = None,
@@ -532,7 +533,8 @@ def get_youtube_comments_endpoint(
     if not target:
         raise HTTPException(400, "video_id, url, handle, or creator_id is required")
     from app.services.scraper import fetch_creator_channel_comments
-    comments = fetch_creator_channel_comments(target, platform="youtube", limit=limit)
+    apify_token = request.headers.get("X-Apify-Token") if request else ""
+    comments = fetch_creator_channel_comments(target, platform="youtube", limit=limit, apify_token=apify_token)
     return {
         "success": True,
         "target": target,
@@ -543,6 +545,7 @@ def get_youtube_comments_endpoint(
 
 @router.get("/{creator_id}/comments")
 def get_creator_comments_endpoint(
+    request: Request,
     creator_id: str,
     limit: int = 10,
     db: Session = Depends(get_db)
@@ -564,7 +567,8 @@ def get_creator_comments_endpoint(
     platform = (c.platform if c else "youtube") or "youtube"
 
     from app.services.scraper import fetch_creator_channel_comments
-    comments = fetch_creator_channel_comments(handle, platform=platform, limit=limit)
+    apify_token = request.headers.get("X-Apify-Token") if request else ""
+    comments = fetch_creator_channel_comments(handle, platform=platform, limit=limit, apify_token=apify_token)
     return {
         "success": True,
         "creator_id": creator_id,
