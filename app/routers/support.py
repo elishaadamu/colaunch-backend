@@ -429,6 +429,63 @@ def get_support_history(
     return {"status": "ok", "count": len(history), "messages": history}
 
 
+@router.delete("/history")
+@router.post("/reset")
+@router.get("/reset")
+def reset_support_history(
+    session_id: Optional[str] = Query(None),
+    creator_id: Optional[str] = Query(None),
+    all_chats: Optional[bool] = Query(True),
+    db: Session = Depends(get_db)
+):
+    """
+    Deletes support chat messages so creator can start completely fresh.
+    """
+    deleted_mongo = 0
+    try:
+        coll = get_collection("support_messages")
+        if coll is not None:
+            if all_chats or (not session_id and not creator_id):
+                res = coll.delete_many({})
+            else:
+                q = {}
+                if session_id and creator_id:
+                    q = {"$or": [{"session_id": session_id}, {"creator_id": creator_id}]}
+                elif session_id:
+                    q = {"session_id": session_id}
+                elif creator_id:
+                    q = {"creator_id": creator_id}
+                res = coll.delete_many(q)
+            deleted_mongo = res.deleted_count
+            logger.info(f"[Support] Purged {deleted_mongo} messages from MongoDB support_messages")
+    except Exception as e:
+        logger.warning(f"[Support] MongoDB reset error: {e}")
+
+    deleted_sql = 0
+    if db:
+        try:
+            q = db.query(SupportMessage)
+            if not all_chats and (session_id or creator_id):
+                if session_id and creator_id:
+                    q = q.filter((SupportMessage.session_id == session_id) | (SupportMessage.creator_id == creator_id))
+                elif session_id:
+                    q = q.filter(SupportMessage.session_id == session_id)
+                elif creator_id:
+                    q = q.filter(SupportMessage.creator_id == creator_id)
+            deleted_sql = q.delete(synchronize_session=False)
+            db.commit()
+            logger.info(f"[Support] Purged {deleted_sql} messages from SQL SupportMessage")
+        except Exception as e:
+            logger.warning(f"[Support] SQL reset error: {e}")
+
+    return {
+        "status": "ok",
+        "message": "All support chat history cleared successfully",
+        "deleted_mongo": deleted_mongo,
+        "deleted_sql": deleted_sql
+    }
+
+
 @router.post("/sync")
 def sync_support_inbox(
     session_id: Optional[str] = Query(None),
