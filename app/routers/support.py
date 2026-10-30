@@ -28,6 +28,7 @@ class SupportMessageRequest(BaseModel):
     creator_id: Optional[str] = None
     creator_handle: Optional[str] = None
     creator_name: Optional[str] = None
+    creator_email: Optional[str] = None
     message: str
     creator_context: Optional[Dict[str, Any]] = None
     force_escalate: Optional[bool] = False
@@ -38,6 +39,7 @@ class SupportEscalateRequest(BaseModel):
     creator_id: Optional[str] = None
     creator_handle: Optional[str] = None
     creator_name: Optional[str] = None
+    creator_email: Optional[str] = None
     reason: Optional[str] = "Creator requested human administrator support"
     creator_context: Optional[Dict[str, Any]] = None
 
@@ -54,7 +56,8 @@ def _format_admin_escalation_email(
     reason: str,
     user_query: str,
     creator_context: dict,
-    recent_history: list = None
+    recent_history: list = None,
+    creator_email: str = None
 ):
     clean_h = (creator_handle or "").lstrip("@").strip()
     handle = f"@{clean_h}" if clean_h else "@creator"
@@ -66,6 +69,9 @@ def _format_admin_escalation_email(
     blueprint = creator_context.get("blueprint", {})
     bp_name = blueprint.get("name", "Custom Platform") if isinstance(blueprint, dict) else str(blueprint)
     pricing = creator_context.get("pricing", "Standard tier")
+    base_url = (settings.FRONTEND_URL or "https://colaunch-web.vercel.app").rstrip("/")
+    dashboard_url = f"{base_url}/dashboard"
+    hub_url = f"{base_url}/{clean_h.lower()}/{creator_id}" if clean_h and creator_id else dashboard_url
 
     history_html = ""
     history_text = ""
@@ -78,15 +84,16 @@ def _format_admin_escalation_email(
             history_text += f"{snd}: {txt}\n"
         history_html = "".join(history_rows)
 
-    subject = f"[CoLaunch Support Ticket] {handle} ({name}) - Human Support Requested"
+    subject = f"[CoLaunch Support Ticket] {handle} ({name}) - Human Support Requested #{session_id}#{creator_id}#"
 
     body_text = f"""CoLaunch Customer Support Alert
 ====================================
 A creator has requested administrator assistance or submitted a question requiring human review.
 
 CREATOR DETAILS:
-- Handle: {handle}
 - Name: {name}
+- Email: {creator_email or 'Not provided'}
+- Handle: {handle}
 - Creator ID: {creator_id or 'N/A'}
 - Session ID: {session_id or 'N/A'}
 - Platform: {platform}
@@ -95,6 +102,8 @@ CREATOR DETAILS:
 - Stage: {stage}
 - Blueprint: {bp_name}
 - Pricing / Monetization: {pricing}
+- Creator Dashboard URL: {dashboard_url}
+- Live Hub URL: {hub_url}
 
 REASON / TRIGGER:
 {reason}
@@ -122,9 +131,11 @@ Admin Inbox: {settings.ADMIN_EMAIL}
     <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
       <h3 style="margin: 0 0 12px 0; font-size: 14px; text-transform: uppercase; color: #94a3b8; letter-spacing: 0.05em;">Creator Workspace Context</h3>
       <table style="width: 100%; font-size: 13px; color: #cbd5e1; border-collapse: collapse;">
-        <tr><td style="padding: 4px 0; color: #94a3b8; width: 140px;">Creator:</td><td style="padding: 4px 0; font-weight: 600; color: #ffffff;">{name} (<span style="color: #38bdf8;">{handle}</span>)</td></tr>
+        <tr><td style="padding: 4px 0; color: #94a3b8; width: 140px;">Creator Name:</td><td style="padding: 4px 0; font-weight: 600; color: #ffffff;">{name} (<span style="color: #38bdf8;">{handle}</span>)</td></tr>
+        <tr><td style="padding: 4px 0; color: #94a3b8;">Contact Email:</td><td style="padding: 4px 0; font-weight: 600; color: #38bdf8;">{creator_email or 'Not provided'}</td></tr>
         <tr><td style="padding: 4px 0; color: #94a3b8;">Creator ID:</td><td style="padding: 4px 0; font-family: monospace;">{creator_id or 'N/A'}</td></tr>
         <tr><td style="padding: 4px 0; color: #94a3b8;">Session ID:</td><td style="padding: 4px 0; font-family: monospace;">{session_id or 'N/A'}</td></tr>
+        <tr><td style="padding: 4px 0; color: #94a3b8;">Dashboard URL:</td><td style="padding: 4px 0;"><a href="{dashboard_url}" style="color: #38bdf8; text-decoration: underline;">{dashboard_url}</a></td></tr>
         <tr><td style="padding: 4px 0; color: #94a3b8;">Niche / Audience:</td><td style="padding: 4px 0;">{niche} ({followers} on {platform})</td></tr>
         <tr><td style="padding: 4px 0; color: #94a3b8;">Current Stage:</td><td style="padding: 4px 0;">{stage}</td></tr>
         <tr><td style="padding: 4px 0; color: #94a3b8;">Blueprint:</td><td style="padding: 4px 0; color: #10b981; font-weight: 600;">{bp_name}</td></tr>
@@ -146,6 +157,111 @@ Admin Inbox: {settings.ADMIN_EMAIL}
     <div style="border-top: 1px solid #232b3e; padding-top: 16px; font-size: 12px; color: #64748b; display: flex; justify-content: space-between;">
       <span>Sent by CoLaunch Autonomous Support Relay</span>
       <span>Admin Target: {settings.ADMIN_EMAIL}</span>
+    </div>
+  </div>
+</body>
+</html>"""
+
+    return subject, body_html, body_text
+
+
+def _format_creator_confirmation_email(
+    creator_name: str,
+    creator_handle: str,
+    creator_id: str,
+    session_id: str,
+    user_query: str,
+    creator_context: dict
+):
+    clean_h = (creator_handle or "").lstrip("@").strip()
+    handle = f"@{clean_h}" if clean_h else "@creator"
+    name = creator_name or "Creator"
+    blueprint = creator_context.get("blueprint", {})
+    bp_name = blueprint.get("name", "Custom Platform") if isinstance(blueprint, dict) else str(blueprint)
+    
+    base_url = (settings.FRONTEND_URL or "https://colaunch-web.vercel.app").rstrip("/")
+    dashboard_url = f"{base_url}/dashboard"
+    hub_url = f"{base_url}/{clean_h.lower()}/{creator_id}" if clean_h and creator_id else dashboard_url
+
+    subject = f"[CoLaunch Support Ticket] Support Request Received · #{session_id}#{creator_id}#"
+
+    body_text = f"""Hi {name},
+
+We have received your support inquiry and escalated it directly to our human operations team.
+
+An administrator is reviewing your workspace for {handle} and will follow up with you promptly.
+
+==================================================
+💬 TWO-WAY EMAIL COMMUNICATION:
+You don't need to stay on the CoLaunch app! 
+You can simply reply directly to this email from your inbox at any time to continue this conversation with our administration team. Every message you send will be routed directly to our operations desk and synced in your chat.
+==================================================
+
+YOUR CREATOR DASHBOARD:
+Access and manage your {bp_name} suite anytime:
+{dashboard_url}
+
+Direct Suite Link:
+{hub_url}
+
+YOUR SUBMITTED INQUIRY:
+"{user_query}"
+
+Best regards,
+CoLaunch Operations Team
+"""
+
+    body_html = f"""<!DOCTYPE html>
+<html>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0b0e14; color: #f1f5f9; padding: 24px; margin: 0;">
+  <div style="max-width: 600px; margin: 0 auto; background: #121722; border: 1px solid #232b3e; border-radius: 16px; padding: 28px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+    
+    <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #232b3e; padding-bottom: 18px; margin-bottom: 24px;">
+      <div>
+        <h2 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800; letter-spacing: -0.02em;">CoLaunch Support</h2>
+        <span style="font-size: 12px; color: #94a3b8;">Creator Priority Operations Desk</span>
+      </div>
+      <span style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase;">Team Assigned</span>
+    </div>
+
+    <p style="font-size: 15px; color: #e2e8f0; line-height: 1.6; margin: 0 0 16px 0;">
+      Hi <strong style="color: #ffffff;">{name}</strong>,
+    </p>
+
+    <p style="font-size: 14px; color: #cbd5e1; line-height: 1.6; margin: 0 0 20px 0;">
+      We've received your inquiry regarding your <strong style="color: #38bdf8;">{bp_name}</strong> platform (<span style="color: #94a3b8;">{handle}</span>). Your ticket has been escalated directly to our senior human operations team, and an administrator will follow up with you promptly.
+    </p>
+
+    <!-- 2-Way Email Callout Card -->
+    <div style="background: linear-gradient(135deg, rgba(56, 189, 248, 0.1), rgba(99, 102, 241, 0.1)); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 12px; padding: 18px; margin-bottom: 24px;">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+        <span style="font-size: 16px;">💬</span>
+        <strong style="color: #38bdf8; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;">2-Way Email Sync Active</strong>
+      </div>
+      <p style="margin: 0; font-size: 13px; color: #e2e8f0; line-height: 1.5;">
+        You don't need to keep the app open! You can <strong>reply directly to this email from your phone or desktop inbox</strong> at any time. Your reply will be synced seamlessly to our operations team and your dashboard chat.
+      </p>
+    </div>
+
+    <!-- Submitted Inquiry Box -->
+    <div style="background: #171d2b; border-left: 4px solid #10b981; border-radius: 8px; padding: 14px 16px; margin-bottom: 24px;">
+      <p style="margin: 0 0 4px 0; font-size: 11px; text-transform: uppercase; color: #10b981; font-weight: 700;">Your Message</p>
+      <p style="margin: 0; font-size: 13.5px; color: #f1f5f9; line-height: 1.5;">"{user_query}"</p>
+    </div>
+
+    <!-- Creator Dashboard CTA Button -->
+    <div style="text-align: center; margin: 28px 0;">
+      <a href="{dashboard_url}" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 700; padding: 12px 28px; border-radius: 10px; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);">
+        Access Your Creator Dashboard &rarr;
+      </a>
+      <p style="margin: 8px 0 0 0; font-size: 11px; color: #64748b;">
+        Direct URL: <a href="{dashboard_url}" style="color: #38bdf8; text-decoration: underline;">{dashboard_url}</a>
+      </p>
+    </div>
+
+    <div style="border-top: 1px solid #232b3e; padding-top: 16px; font-size: 11.5px; color: #64748b; display: flex; justify-content: space-between;">
+      <span>CoLaunch Autonomous Operations</span>
+      <span>Ticket #{session_id}</span>
     </div>
   </div>
 </body>
@@ -345,6 +461,7 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
     display_handle = f"@{clean_handle}" if clean_handle else "@creator"
     creator_name = req.creator_name or "Creator"
     context = req.creator_context or {}
+    creator_email = (req.creator_email or context.get("email") or context.get("contactEmail") or "").strip()
 
     user_msg_id = req.id or str(uuid.uuid4())
     user_record = {
@@ -353,6 +470,7 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
         "creator_id": creator_id,
         "creator_handle": display_handle,
         "creator_name": creator_name,
+        "creator_email": creator_email,
         "sender": "user",
         "message": req.message,
         "creator_context": context,
@@ -400,7 +518,8 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
             reason=f"Creator query: '{req.message}'",
             user_query=req.message,
             creator_context=context,
-            recent_history=recent
+            recent_history=recent,
+            creator_email=creator_email
         )
         email_sent = False
         try:
@@ -409,26 +528,58 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
                 subject=subject,
                 body_html=body_html,
                 body_text=body_text,
-                from_name="CoLaunch Creator Support Desk"
+                from_name="CoLaunch Creator Support Desk",
+                reply_to=creator_email if creator_email else None
             )
             email_sent = True
-            logger.info(f"[Support] Escalation email dispatched to {settings.ADMIN_EMAIL}")
+            logger.info(f"[Support] Escalation email dispatched to admin {settings.ADMIN_EMAIL}")
         except Exception as err:
             logger.error(f"[Support] Failed sending escalation email: {err}")
 
-        assistant_reply = (
-            f"I have escalated your inquiry directly to our dedicated support team with your workspace snapshot for {display_handle}. "
-            f"Our team is reviewing it now and will follow up with you promptly. You can also share any further details right here."
-        )
+        # Send 2-way confirmation email to creator
+        if creator_email and "@" in creator_email:
+            try:
+                c_subj, c_html, c_text = _format_creator_confirmation_email(
+                    creator_name=creator_name,
+                    creator_handle=display_handle,
+                    creator_id=creator_id,
+                    session_id=session_id,
+                    user_query=req.message,
+                    creator_context=context
+                )
+                email_provider.send(
+                    to_email=creator_email,
+                    subject=c_subj,
+                    body_html=c_html,
+                    body_text=c_text,
+                    from_name="CoLaunch Support Team",
+                    reply_to=settings.ADMIN_EMAIL
+                )
+                logger.info(f"[Support] Dispatched 2-way confirmation email to creator: {creator_email}")
+            except Exception as c_err:
+                logger.warning(f"[Support] Failed sending creator confirmation email: {c_err}")
+
+        if creator_email:
+            assistant_reply = (
+                f"I have escalated your inquiry directly to our dedicated support team with your workspace snapshot. "
+                f"A confirmation has been sent to your email ({creator_email}). "
+                f"You can continue chatting right here, or simply reply directly to that email from your inbox anytime!"
+            )
+        else:
+            assistant_reply = (
+                f"I have escalated your inquiry directly to our dedicated support team with your workspace snapshot for {display_handle}. "
+                f"Our team is reviewing it now and will follow up with you promptly. You can also share any further details right here."
+            )
     elif is_greeting:
-        # Smooth and natural greeting response without dumping entire channel metrics
-        assistant_reply = f"Hi {display_handle}! How can I help you with your {bp_name} platform today?"
+        greeting_name = creator_name if creator_name and creator_name != "Creator" else display_handle
+        assistant_reply = f"Hi {greeting_name}! How can I help you with your {bp_name} platform today?"
     else:
         # Grounded AI generation
         system_prompt = f"""You are CoLaunch's AI Customer Support Agent for Creators. You provide real-time, helpful, smooth, friendly, and practical support.
 CRITICAL GROUNDING: You are supporting THIS specific creator right now:
+- Creator Name: {creator_name}
+- Creator Email: {creator_email or 'Not provided'}
 - Handle: {display_handle}
-- Name: {creator_name}
 - Niche: {niche}
 - Audience: {followers} followers on {platform}
 - Current App / Blueprint: {bp_name}
@@ -437,12 +588,13 @@ CRITICAL GROUNDING: You are supporting THIS specific creator right now:
 - Monetization / Pricing: {pricing}
 
 Guidelines:
-1. Speak naturally, warmly, and smoothly. Keep replies direct, concise, and helpful (under 75 words / 1-2 short paragraphs maximum).
-2. Ground your answers specifically in their platform ({bp_name}) and niche ({niche}), but DO NOT dump or recite a whole list of stats, subscriber counts, or zero monetization unless the creator explicitly asks about them.
-3. If the user asks something you cannot answer (such as custom contract adjustments, bank routing verification, server hardware bugs) or asks for human staff, reply with helpful reassurance and include the token [ESCALATE_TO_ADMIN] in your reply.
-4. When referring to the creator handle, always use single '@', like {display_handle} (never double '@@')."""
+1. Address the creator by their name ({creator_name}) warmly and naturally.
+2. Speak smoothly, directly, concisely, and helpfully (under 75 words / 1-2 short paragraphs maximum).
+3. Ground your answers specifically in their platform ({bp_name}) and niche ({niche}), but DO NOT dump or recite a whole list of stats, subscriber counts, or zero monetization unless the creator explicitly asks about them.
+4. If the user asks something you cannot answer (such as custom contract adjustments, bank routing verification, server hardware bugs) or asks for human staff, reply with helpful reassurance and include the token [ESCALATE_TO_ADMIN] in your reply.
+5. When referring to the creator handle, always use single '@', like {display_handle} (never double '@@')."""
 
-        user_prompt = f"Creator {display_handle} asks: \"{req.message}\""
+        user_prompt = f"Creator {creator_name} ({display_handle}) asks: \"{req.message}\""
 
         try:
             ai_text = call_llm(
@@ -463,7 +615,8 @@ Guidelines:
                     reason="AI determined human intervention required",
                     user_query=req.message,
                     creator_context=context,
-                    recent_history=recent
+                    recent_history=recent,
+                    creator_email=creator_email
                 )
                 try:
                     email_provider.send(
@@ -471,17 +624,40 @@ Guidelines:
                         subject=subject,
                         body_html=body_html,
                         body_text=body_text,
-                        from_name="CoLaunch Creator Support Desk"
+                        from_name="CoLaunch Creator Support Desk",
+                        reply_to=creator_email if creator_email else None
                     )
                 except Exception as e:
-                    logger.warning(f"[Support] Failed sending auto-escalation email: {e}")
+                    logger.warning(f"[Support] Failed sending auto-escalation email to admin: {e}")
+
+                if creator_email and "@" in creator_email:
+                    try:
+                        c_subj, c_html, c_text = _format_creator_confirmation_email(
+                            creator_name=creator_name,
+                            creator_handle=display_handle,
+                            creator_id=creator_id,
+                            session_id=session_id,
+                            user_query=req.message,
+                            creator_context=context
+                        )
+                        email_provider.send(
+                            to_email=creator_email,
+                            subject=c_subj,
+                            body_html=c_html,
+                            body_text=c_text,
+                            from_name="CoLaunch Support Team",
+                            reply_to=settings.ADMIN_EMAIL
+                        )
+                    except Exception as ce:
+                        logger.warning(f"[Support] Failed sending auto-escalation email to creator: {ce}")
+
             assistant_reply = ai_text.replace("@@", "@")
         except Exception as e:
             logger.error(f"[Support] AI generation error: {e}")
             assistant_reply = (
-                f"I'm reviewing your setup for {display_handle}. "
+                f"I'm reviewing your setup, {creator_name}. "
                 f"Your {bp_name} suite is configured for {niche} with {features_str}. "
-                f"If you'd like to speak directly with our support team, let me know and I'll connect you right away."
+                f"If you'd like to speak directly with our human support team, let me know and I'll connect you right away."
             )
 
     assistant_record = {
@@ -517,8 +693,9 @@ def escalate_to_admin(req: SupportEscalateRequest, db: Session = Depends(get_db)
     session_id = req.session_id or f"session_{uuid.uuid4().hex[:12]}"
     creator_id = req.creator_id or ""
     creator_handle = req.creator_handle or ""
-    creator_name = req.creator_name or ""
+    creator_name = req.creator_name or "Creator"
     context = req.creator_context or {}
+    creator_email = (req.creator_email or context.get("email") or context.get("contactEmail") or "").strip()
 
     recent = _fetch_history(session_id=session_id, creator_id=creator_id, limit=12, sql_db=db)
     last_query = req.reason or "Creator requested direct admin contact"
@@ -533,7 +710,8 @@ def escalate_to_admin(req: SupportEscalateRequest, db: Session = Depends(get_db)
         reason=req.reason,
         user_query=last_query,
         creator_context=context,
-        recent_history=recent
+        recent_history=recent,
+        creator_email=creator_email
     )
 
     send_status = "sent"
@@ -543,13 +721,43 @@ def escalate_to_admin(req: SupportEscalateRequest, db: Session = Depends(get_db)
             subject=subject,
             body_html=body_html,
             body_text=body_text,
-            from_name="CoLaunch Support Desk"
+            from_name="CoLaunch Creator Support Desk",
+            reply_to=creator_email if creator_email else None
         )
     except Exception as err:
-        logger.error(f"[Support] Escalation email failure: {err}")
+        logger.error(f"[Support] Escalation email failure to admin: {err}")
         send_status = f"failed: {err}"
 
+    if creator_email and "@" in creator_email:
+        try:
+            c_subj, c_html, c_text = _format_creator_confirmation_email(
+                creator_name=creator_name,
+                creator_handle=creator_handle,
+                creator_id=creator_id,
+                session_id=session_id,
+                user_query=last_query,
+                creator_context=context
+            )
+            email_provider.send(
+                to_email=creator_email,
+                subject=c_subj,
+                body_html=c_html,
+                body_text=c_text,
+                from_name="CoLaunch Support Team",
+                reply_to=settings.ADMIN_EMAIL
+            )
+            logger.info(f"[Support] Dispatched 2-way confirmation email to creator: {creator_email}")
+        except Exception as cerr:
+            logger.warning(f"[Support] Failed sending creator confirmation email: {cerr}")
+
     confirm_msg_id = str(uuid.uuid4())
+    confirm_text = (
+        f"Your ticket has been escalated directly to our senior human operations team. "
+        f"A confirmation has also been sent to your email ({creator_email}). "
+        f"You can continue chatting right here, or reply directly to that email from your inbox at any time!"
+        if creator_email else
+        "Your ticket has been escalated to our dedicated operations team. An administrator will follow up with you promptly."
+    )
     confirm_record = {
         "id": confirm_msg_id,
         "session_id": session_id,
@@ -557,7 +765,7 @@ def escalate_to_admin(req: SupportEscalateRequest, db: Session = Depends(get_db)
         "creator_handle": creator_handle,
         "creator_name": creator_name,
         "sender": "assistant",
-        "message": "Your ticket has been escalated to our dedicated support team. An administrator has been notified and will follow up with you promptly.",
+        "message": confirm_text,
         "creator_context": context,
         "status": "escalated_to_admin",
         "escalated": True,

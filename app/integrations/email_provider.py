@@ -81,6 +81,7 @@ class EmailProvider:
         body_text: str,
         from_email: str = None,
         from_name: str = None,
+        reply_to: str = None,
     ) -> dict:
         """
         Sends an email prioritizing cloud-friendly HTTPS APIs (Port 443) before SMTP.
@@ -119,12 +120,15 @@ class EmailProvider:
         else:
             sender_email = candidate_sender
 
-        # Ensure Reply-To always points to a real, routable Gmail inbox so replies never bounce
-        reply_email = (
-            settings.GOOGLE_EMAIL
-            or (sender_email if "brevosend.com" not in sender_email.lower() else None)
-            or "creatorforgeweb@gmail.com"
-        ).strip()
+        # Ensure Reply-To points to explicitly passed reply_to or a real, routable Gmail inbox
+        if reply_to and reply_to.strip():
+            reply_email = reply_to.strip()
+        else:
+            reply_email = (
+                settings.GOOGLE_EMAIL
+                or (sender_email if "brevosend.com" not in sender_email.lower() else None)
+                or "creatorforgeweb@gmail.com"
+            ).strip()
 
         errors = []
 

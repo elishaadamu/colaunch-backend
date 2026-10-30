@@ -270,12 +270,17 @@ def poll_support_email_replies() -> Dict[str, Any]:
                 if not session_id and not creator_id:
                     continue
 
-                # 7. Deterministic deduplication
+                # 7. Determine Sender Role (Admin vs Creator email reply)
+                is_from_admin = (settings.ADMIN_EMAIL and settings.ADMIN_EMAIL.lower() in from_hdr) or ("creatorforgeweb" in from_hdr)
+                sender_role = "admin" if is_from_admin else "user"
+                sender_name = "Support Team" if is_from_admin else (idents.get("creator_name") or "Creator")
+
+                # Deterministic deduplication
                 norm_msg = re.sub(r"\s+", " ", cleaned_text).strip().lower()
                 target_key = creator_id or session_id or "general"
-                hash_source = f"{target_key}_{norm_msg}"
+                hash_source = f"{sender_role}_{target_key}_{norm_msg}"
                 msg_hash = hashlib.sha256(hash_source.encode()).hexdigest()[:16]
-                msg_id = f"admin_reply_{msg_hash}"
+                msg_id = f"{sender_role}_reply_{msg_hash}"
 
                 # Check if already in MongoDB
                 coll = get_collection("support_messages")
@@ -285,7 +290,7 @@ def poll_support_email_replies() -> Dict[str, Any]:
                         "$or": [
                             {"id": msg_id},
                             {
-                                "sender": "admin",
+                                "sender": sender_role,
                                 "message": cleaned_text,
                                 "$or": [{"session_id": session_id}, {"creator_id": creator_id}]
                             }
@@ -304,27 +309,27 @@ def poll_support_email_replies() -> Dict[str, Any]:
                     except Exception:
                         pass
 
-                admin_record = {
+                msg_record = {
                     "id": msg_id,
                     "session_id": session_id,
                     "creator_id": creator_id,
                     "creator_handle": clean_handle,
-                    "creator_name": "Support Team",
-                    "sender": "admin",
+                    "creator_name": sender_name,
+                    "sender": sender_role,
                     "message": cleaned_text,
                     "creator_context": {
-                        "source": "admin_email_reply",
+                        "source": f"{sender_role}_email_reply",
                         "subject": subject,
                         "date": date_hdr,
                     },
-                    "status": "admin_replied",
+                    "status": "admin_replied" if is_from_admin else "user_replied",
                     "escalated": True,
                     "created_at": created_at_iso,
                 }
 
                 # Save to MongoDB
                 if coll is not None:
-                    coll.update_one({"id": msg_id}, {"$set": admin_record}, upsert=True)
+                    coll.update_one({"id": msg_id}, {"$set": msg_record}, upsert=True)
 
                 # Save to SQLite / SQL DB
                 if SessionLocal and SupportMessage:
@@ -333,7 +338,7 @@ def poll_support_email_replies() -> Dict[str, Any]:
                         existing_sql = db.query(SupportMessage).filter(
                             (SupportMessage.id == msg_id) |
                             (
-                                (SupportMessage.sender == "admin") &
+                                (SupportMessage.sender == sender_role) &
                                 (SupportMessage.message == cleaned_text) &
                                 ((SupportMessage.session_id == session_id) | (SupportMessage.creator_id == creator_id))
                             )
@@ -345,11 +350,11 @@ def poll_support_email_replies() -> Dict[str, Any]:
                                 session_id=session_id,
                                 creator_id=creator_id,
                                 creator_handle=clean_handle,
-                                creator_name="Support Team",
-                                sender="admin",
+                                creator_name=sender_name,
+                                sender=sender_role,
                                 message=cleaned_text,
-                                creator_context=json.dumps(admin_record["creator_context"]),
-                                status="admin_replied",
+                                creator_context=json.dumps(msg_record["creator_context"]),
+                                status="admin_replied" if is_from_admin else "user_replied",
                                 escalated=True,
                             )
                             db.add(db_item)
@@ -359,7 +364,7 @@ def poll_support_email_replies() -> Dict[str, Any]:
                         logger.warning(f"[Support Poller] SQL save error: {sql_err}")
 
                 ingested_count += 1
-                logger.info(f"[Support Poller] Ingested human admin reply for {clean_handle} ({session_id}): '{cleaned_text[:50]}...'")
+                logger.info(f"[Support Poller] Ingested 2-way {sender_role} email reply for {clean_handle} ({session_id}): '{cleaned_text[:50]}...'")
 
             except Exception as item_err:
                 logger.warning(f"[Support Poller] Error parsing message {eid}: {item_err}")
