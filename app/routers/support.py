@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models.support import SupportMessage
-from app.mongodb import get_mongo_database
+from app.mongodb import get_collection, get_mongo_db
 from app.integrations.email_provider import EmailProvider
 from app.services.llm import call_llm
 
@@ -155,9 +155,9 @@ Admin Inbox: {settings.ADMIN_EMAIL}
 def _save_message_to_db(msg_dict: dict, sql_db: Session = None):
     # 1. MongoDB Save
     try:
-        mongo = get_mongo_database()
-        if mongo is not None:
-            mongo.support_messages.update_one(
+        coll = get_collection("support_messages")
+        if coll is not None:
+            coll.update_one(
                 {"id": msg_dict["id"]},
                 {"$set": msg_dict},
                 upsert=True
@@ -200,8 +200,8 @@ def _fetch_history(session_id: str = None, creator_id: str = None, limit: int = 
     results = []
     # 1. Try MongoDB
     try:
-        mongo = get_mongo_database()
-        if mongo is not None:
+        coll = get_collection("support_messages")
+        if coll is not None:
             query = {}
             if session_id and creator_id:
                 query = {"$or": [{"session_id": session_id}, {"creator_id": creator_id}]}
@@ -210,7 +210,7 @@ def _fetch_history(session_id: str = None, creator_id: str = None, limit: int = 
             elif creator_id:
                 query = {"creator_id": creator_id}
 
-            cursor = mongo.support_messages.find(query).sort("created_at", 1).limit(limit)
+            cursor = coll.find(query).sort("created_at", 1).limit(limit)
             for doc in cursor:
                 doc["_id"] = str(doc.get("_id", ""))
                 results.append(doc)

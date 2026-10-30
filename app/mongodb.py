@@ -101,6 +101,9 @@ def get_mongo_db() -> Database:
     return _db
 
 
+get_mongo_database = get_mongo_db
+
+
 def get_collection(name: str) -> Collection:
     """Primary accessor for MongoDB Atlas collections. Always queries real MongoDB."""
     db = get_mongo_db()
