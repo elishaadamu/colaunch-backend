@@ -14,7 +14,7 @@ from app.models.support import SupportMessage
 from app.mongodb import get_collection, get_mongo_db
 from app.integrations.email_provider import EmailProvider
 from app.services.llm import call_llm
-from app.services.support_inbox_poller import poll_support_email_replies
+from app.services.support_inbox_poller import poll_support_email_replies, cleanup_corrupted_messages, CORRUPTED_MARKERS
 
 logger = logging.getLogger("creator_forge.support")
 router = APIRouter(prefix="/api/support", tags=["Customer Support"])
@@ -56,7 +56,8 @@ def _format_admin_escalation_email(
     creator_context: dict,
     recent_history: list = None
 ):
-    handle = creator_handle or "@creator"
+    clean_h = (creator_handle or "").lstrip("@").strip()
+    handle = f"@{clean_h}" if clean_h else "@creator"
     name = creator_name or "Creator"
     niche = creator_context.get("niche", "Not specified")
     followers = creator_context.get("followers", "Unknown")
@@ -72,7 +73,7 @@ def _format_admin_escalation_email(
         history_rows = []
         for m in recent_history[-8:]:
             snd = m.get("sender", "user").capitalize()
-            txt = m.get("message", "")
+            txt = (m.get("message", "") or "").replace("@@", "@")
             history_rows.append(f"<p style='margin:4px 0;'><strong>{snd}:</strong> {txt}</p>")
             history_text += f"{snd}: {txt}\n"
         history_html = "".join(history_rows)
@@ -197,6 +198,15 @@ def _save_message_to_db(msg_dict: dict, sql_db: Session = None):
                 pass
 
 
+def _is_clean_message(msg: dict) -> bool:
+    txt = msg.get("message") or ""
+    txt_lower = txt.lower()
+    for m in CORRUPTED_MARKERS:
+        if m.lower() in txt_lower:
+            return False
+    return True
+
+
 def _fetch_history(session_id: str = None, creator_id: str = None, limit: int = 50, sql_db: Session = None) -> List[dict]:
     results = []
     # 1. Try MongoDB
@@ -211,12 +221,26 @@ def _fetch_history(session_id: str = None, creator_id: str = None, limit: int = 
             elif creator_id:
                 query = {"creator_id": creator_id}
 
-            cursor = coll.find(query).sort("created_at", 1).limit(limit)
+            cursor = coll.find(query).sort("created_at", 1).limit(limit * 2)
+            seen_admin_texts = set()
             for doc in cursor:
                 doc["_id"] = str(doc.get("_id", ""))
+                if not _is_clean_message(doc):
+                    continue
+                # Normalize handle to avoid @@
+                if doc.get("creator_handle"):
+                    doc["creator_handle"] = "@" + doc["creator_handle"].lstrip("@")
+                if doc.get("message"):
+                    doc["message"] = doc["message"].replace("@@", "@")
+                # Deduplicate admin messages
+                if doc.get("sender") == "admin":
+                    cleaned_txt = doc.get("message", "").strip().lower()
+                    if cleaned_txt in seen_admin_texts:
+                        continue
+                    seen_admin_texts.add(cleaned_txt)
                 results.append(doc)
             if results:
-                return results
+                return results[-limit:]
     except Exception as e:
         logger.warning(f"[Support] MongoDB history fetch error: {e}")
 
@@ -231,8 +255,19 @@ def _fetch_history(session_id: str = None, creator_id: str = None, limit: int = 
             elif creator_id:
                 q = q.filter(SupportMessage.creator_id == creator_id)
 
-            items = q.order_by(SupportMessage.created_at.asc()).limit(limit).all()
+            items = q.order_by(SupportMessage.created_at.asc()).limit(limit * 2).all()
+            seen_admin_texts = set()
             for it in items:
+                msg_txt = it.message or ""
+                if not _is_clean_message({"message": msg_txt}):
+                    continue
+                # Deduplicate admin messages
+                if it.sender == "admin":
+                    cleaned_txt = msg_txt.strip().lower()
+                    if cleaned_txt in seen_admin_texts:
+                        continue
+                    seen_admin_texts.add(cleaned_txt)
+
                 ctx = {}
                 try:
                     ctx = json.loads(it.creator_context) if it.creator_context else {}
@@ -242,10 +277,10 @@ def _fetch_history(session_id: str = None, creator_id: str = None, limit: int = 
                     "id": it.id,
                     "session_id": it.session_id,
                     "creator_id": it.creator_id,
-                    "creator_handle": it.creator_handle,
+                    "creator_handle": "@" + (it.creator_handle or "creator").lstrip("@"),
                     "creator_name": it.creator_name,
                     "sender": it.sender,
-                    "message": it.message,
+                    "message": msg_txt.replace("@@", "@"),
                     "creator_context": ctx,
                     "status": it.status,
                     "escalated": it.escalated,
@@ -254,7 +289,7 @@ def _fetch_history(session_id: str = None, creator_id: str = None, limit: int = 
         except Exception as e:
             logger.warning(f"[Support] SQL history fetch error: {e}")
 
-    return results
+    return results[-limit:]
 
 
 @router.get("/history")
@@ -269,6 +304,7 @@ def get_support_history(
     Can be picked by session_id (during onboarding) or by creator_id (in dashboard).
     """
     try:
+        cleanup_corrupted_messages()
         poll_support_email_replies()
     except Exception as e:
         logger.debug(f"[Support] Instant poller check: {e}")
@@ -304,8 +340,10 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
     """
     session_id = req.session_id or f"session_{uuid.uuid4().hex[:12]}"
     creator_id = req.creator_id or ""
-    creator_handle = req.creator_handle or ""
-    creator_name = req.creator_name or ""
+    raw_handle = req.creator_handle or ""
+    clean_handle = raw_handle.lstrip("@").strip()
+    display_handle = f"@{clean_handle}" if clean_handle else "@creator"
+    creator_name = req.creator_name or "Creator"
     context = req.creator_context or {}
 
     user_msg_id = req.id or str(uuid.uuid4())
@@ -313,7 +351,7 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
         "id": user_msg_id,
         "session_id": session_id,
         "creator_id": creator_id,
-        "creator_handle": creator_handle,
+        "creator_handle": display_handle,
         "creator_name": creator_name,
         "sender": "user",
         "message": req.message,
@@ -326,6 +364,10 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
 
     # Check for escalation intent
     user_lower = req.message.lower().strip()
+    clean_punct = re.sub(r"[!?.~,]", "", user_lower).strip()
+    greetings = {"hi", "hello", "hey", "good morning", "good evening", "good afternoon", "greetings", "sup", "yo", "hi there", "hello there", "howdy"}
+    is_greeting = clean_punct in greetings
+
     escalation_triggers = [
         "human", "talk to human", "speak to human", "real person", "admin", "agent",
         "representative", "call me", "phone", "refund", "chargeback", "legal",
@@ -337,11 +379,21 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
     assistant_reply = ""
     is_escalated = False
 
+    blueprint = context.get("blueprint") or {}
+    bp_name = blueprint.get("name", "Creator Hub") if isinstance(blueprint, dict) else str(blueprint)
+    features = context.get("features") or (blueprint.get("features") if isinstance(blueprint, dict) else [])
+    features_str = ", ".join(features) if isinstance(features, list) else str(features)
+    followers = context.get("followers", "audience")
+    niche = context.get("niche", "creator niche")
+    platform = context.get("platform", "YouTube")
+    stage = context.get("stage", "creator onboarding/dashboard")
+    pricing = context.get("pricing", "$29/mo membership & product vault")
+
     if should_escalate:
         is_escalated = True
         recent = _fetch_history(session_id=session_id, creator_id=creator_id, limit=10, sql_db=db)
         subject, body_html, body_text = _format_admin_escalation_email(
-            creator_handle=creator_handle,
+            creator_handle=display_handle,
             creator_name=creator_name,
             creator_id=creator_id,
             session_id=session_id,
@@ -365,25 +417,18 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
             logger.error(f"[Support] Failed sending escalation email: {err}")
 
         assistant_reply = (
-            f"I have escalated your inquiry directly to our dedicated support team with your full workspace snapshot for @{creator_handle or 'your channel'}. "
-            f"Our team is reviewing it now and will follow up with you promptly. You can also share any further details or files right here."
+            f"I have escalated your inquiry directly to our dedicated support team with your workspace snapshot for {display_handle}. "
+            f"Our team is reviewing it now and will follow up with you promptly. You can also share any further details right here."
         )
+    elif is_greeting:
+        # Smooth and natural greeting response without dumping entire channel metrics
+        assistant_reply = f"Hi {display_handle}! How can I help you with your {bp_name} platform today?"
     else:
         # Grounded AI generation
-        blueprint = context.get("blueprint") or {}
-        bp_name = blueprint.get("name", "Creator Hub") if isinstance(blueprint, dict) else str(blueprint)
-        features = context.get("features") or (blueprint.get("features") if isinstance(blueprint, dict) else [])
-        features_str = ", ".join(features) if isinstance(features, list) else str(features)
-        followers = context.get("followers", "audience")
-        niche = context.get("niche", "creator niche")
-        platform = context.get("platform", "YouTube")
-        stage = context.get("stage", "creator onboarding/dashboard")
-        pricing = context.get("pricing", "$29/mo membership & product vault")
-
-        system_prompt = f"""You are CoLaunch's AI Customer Support Agent for Creators. You provide real-time, highly knowledgeable, friendly, and practical support.
+        system_prompt = f"""You are CoLaunch's AI Customer Support Agent for Creators. You provide real-time, helpful, smooth, friendly, and practical support.
 CRITICAL GROUNDING: You are supporting THIS specific creator right now:
-- Handle: {creator_handle or '@creator'}
-- Name: {creator_name or 'Creator'}
+- Handle: {display_handle}
+- Name: {creator_name}
 - Niche: {niche}
 - Audience: {followers} followers on {platform}
 - Current App / Blueprint: {bp_name}
@@ -392,17 +437,17 @@ CRITICAL GROUNDING: You are supporting THIS specific creator right now:
 - Monetization / Pricing: {pricing}
 
 Guidelines:
-1. Always ground your explanation in their specific workspace, audience, and blueprint ({bp_name}). Never give generic filler.
-2. Explain how their member app, custom courses, digital store, community discussions, or stripe payout rails operate.
-3. If the user asks something you genuinely cannot answer (such as custom contract adjustments, bank routing verification, server hardware bugs) or asks for human staff, reply with helpful reassurance and include the token [ESCALATE_TO_ADMIN] in your reply.
-4. Keep replies clear, well-structured, concise (under 160 words), and encouraging."""
+1. Speak naturally, warmly, and smoothly. Keep replies direct, concise, and helpful (under 75 words / 1-2 short paragraphs maximum).
+2. Ground your answers specifically in their platform ({bp_name}) and niche ({niche}), but DO NOT dump or recite a whole list of stats, subscriber counts, or zero monetization unless the creator explicitly asks about them.
+3. If the user asks something you cannot answer (such as custom contract adjustments, bank routing verification, server hardware bugs) or asks for human staff, reply with helpful reassurance and include the token [ESCALATE_TO_ADMIN] in your reply.
+4. When referring to the creator handle, always use single '@', like {display_handle} (never double '@@')."""
 
-        user_prompt = f"Creator @{creator_handle or 'user'} asks: \"{req.message}\""
+        user_prompt = f"Creator {display_handle} asks: \"{req.message}\""
 
         try:
             ai_text = call_llm(
                 prompt=user_prompt,
-                max_tokens=600,
+                max_tokens=300,
                 system_prompt=system_prompt
             )
             if "[ESCALATE_TO_ADMIN]" in ai_text:
@@ -411,7 +456,7 @@ Guidelines:
                 # Send escalation email
                 recent = _fetch_history(session_id=session_id, creator_id=creator_id, limit=10, sql_db=db)
                 subject, body_html, body_text = _format_admin_escalation_email(
-                    creator_handle=creator_handle,
+                    creator_handle=display_handle,
                     creator_name=creator_name,
                     creator_id=creator_id,
                     session_id=session_id,
@@ -430,11 +475,11 @@ Guidelines:
                     )
                 except Exception as e:
                     logger.warning(f"[Support] Failed sending auto-escalation email: {e}")
-            assistant_reply = ai_text
+            assistant_reply = ai_text.replace("@@", "@")
         except Exception as e:
             logger.error(f"[Support] AI generation error: {e}")
             assistant_reply = (
-                f"I'm reviewing your setup for {creator_handle or 'your channel'}. "
+                f"I'm reviewing your setup for {display_handle}. "
                 f"Your {bp_name} suite is configured for {niche} with {features_str}. "
                 f"If you'd like to speak directly with our support team, let me know and I'll connect you right away."
             )
@@ -443,7 +488,7 @@ Guidelines:
         "id": assistant_msg_id,
         "session_id": session_id,
         "creator_id": creator_id,
-        "creator_handle": creator_handle,
+        "creator_handle": display_handle,
         "creator_name": creator_name,
         "sender": "assistant",
         "message": assistant_reply,
