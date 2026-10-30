@@ -13,5 +13,6 @@ from app.models.project import (  # noqa: F401
     CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
 )
 from app.models.workflow_state import WorkflowState  # noqa: F401
+from app.models.support import SupportMessage  # noqa: F401
 
 

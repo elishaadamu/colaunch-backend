@@ -20,7 +20,7 @@ def generate_step6_question_answer(creator_name: str, first_name: str, concepts:
     concepts_summary = "\n".join(
         f"{idx+1}. {c.get('name', f'Concept {idx+1}')} — {c.get('tagline', 'Specialized tool')} ({c.get('pricing', '$29/mo')})"
         for idx, c in enumerate(concepts[:3])
-    ) if concepts else "1. Creator OS — Automated workspace ($29/mo)"
+    ) if concepts else "1. Creator Platform — Automated community & courses ($29/mo)"
 
     # 1. Try real LLM generation first
     try:
@@ -132,7 +132,7 @@ Keep it concise, compelling, and free of placeholders.
 def generate_step6_persuasion_email(creator_name: str, first_name: str, concepts: list, creator_objection: str) -> tuple[str, str]:
     """Generates an empathetic, high-conviction persuasion email addressing confusion, hesitation, or soft decline."""
     clean_obj = (creator_objection or "").strip()
-    top_c = concepts[0] if concepts else {"name": "Creator OS", "pricing": "$29/mo"}
+    top_c = concepts[0] if concepts else {"name": "Creator Platform", "pricing": "$29/mo"}
     is_confused = any(w in clean_obj.lower() for w in ["confus", "complicat", "unclear", "dont understand", "don't understand", "reject"])
 
     subject = (
@@ -209,7 +209,7 @@ Creator Forge Studio Team"""
 
 def generate_step6_review_preview_nudge(creator_name: str, first_name: str, concepts: list, reply_body: str) -> tuple[str, str]:
     """Generates a responsive, helpful follow-up when the creator acknowledges review (e.g. 'Thanks, I'll check them out', 'I'll take a look')."""
-    top_c = concepts[0] if concepts else {"name": "Creator OS", "tagline": "Automated workspace", "pricing": "$29/mo"}
+    top_c = concepts[0] if concepts else {"name": "Creator Platform", "tagline": "Automated community & courses", "pricing": "$29/mo"}
     subject = f"Re: Quick 60-second preview: {top_c.get('name', 'Software Concepts')} for {creator_name}"
     clean_reply = (reply_body or "").strip()
 

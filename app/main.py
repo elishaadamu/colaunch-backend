@@ -13,7 +13,8 @@ from app.config import settings
 from app.database import init_db
 from app.routers import (
     creators, discovery, outreach, campaigns, decks, suppression, analytics, audit,
-    public_portal, content_calendar, autonomous, projects, workflow, upload, niches
+    public_portal, content_calendar, autonomous, projects, workflow, upload, niches,
+    support
 )
 from app.routers import agent as agent_router
 from app.routers import auth as auth_router
@@ -134,6 +135,7 @@ app.include_router(projects.router)
 app.include_router(workflow.router)
 app.include_router(upload.router)
 app.include_router(niches.router)
+app.include_router(support.router)
 
 
 
