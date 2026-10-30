@@ -343,9 +343,8 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
             logger.error(f"[Support] Failed sending escalation email: {err}")
 
         assistant_reply = (
-            f"I have escalated your inquiry directly to our human administrator team ({settings.ADMIN_EMAIL}). "
-            f"Our team has been dispatched via Brevo & Google SMTP with your full workspace snapshot for @{creator_handle or 'your channel'}. "
-            f"We are reviewing it now. You can also share any further files or details right here."
+            f"I have escalated your inquiry directly to our dedicated support team with your full workspace snapshot for @{creator_handle or 'your channel'}. "
+            f"Our team is reviewing it now and will follow up with you promptly. You can also share any further details or files right here."
         )
     else:
         # Grounded AI generation
@@ -415,7 +414,7 @@ Guidelines:
             assistant_reply = (
                 f"I'm reviewing your setup for {creator_handle or 'your channel'}. "
                 f"Your {bp_name} suite is configured for {niche} with {features_str}. "
-                f"If you'd like to talk directly with an administrator, let me know and I'll notify {settings.ADMIN_EMAIL} immediately."
+                f"If you'd like to speak directly with our support team, let me know and I'll connect you right away."
             )
 
     assistant_record = {
@@ -491,7 +490,7 @@ def escalate_to_admin(req: SupportEscalateRequest, db: Session = Depends(get_db)
         "creator_handle": creator_handle,
         "creator_name": creator_name,
         "sender": "assistant",
-        "message": f"Your ticket has been escalated to our human admin team at {settings.ADMIN_EMAIL} via Brevo & Google SMTP. An admin has been notified and will follow up with you promptly.",
+        "message": "Your ticket has been escalated to our dedicated support team. An administrator has been notified and will follow up with you promptly.",
         "creator_context": context,
         "status": "escalated_to_admin",
         "escalated": True,
@@ -503,7 +502,6 @@ def escalate_to_admin(req: SupportEscalateRequest, db: Session = Depends(get_db)
         "status": "ok",
         "escalated": True,
         "email_status": send_status,
-        "admin_email": settings.ADMIN_EMAIL,
         "message_id": confirm_msg_id,
         "reply": confirm_record["message"],
     }
@@ -512,16 +510,14 @@ def escalate_to_admin(req: SupportEscalateRequest, db: Session = Depends(get_db)
 @router.get("/status")
 def get_support_status():
     """
-    Returns live connectivity status of AI, Brevo, and Google SMTP/IMAP.
+    Returns live connectivity status of AI and support desk.
     """
     return {
         "status": "ok",
         "ai_provider": settings.ACTIVE_AI_PROVIDER,
         "has_gemini": bool(settings.GEMINI_API_KEY),
         "has_openai": bool(settings.OPENAI_API_KEY),
-        "admin_email": settings.ADMIN_EMAIL,
-        "brevo_configured": bool(settings.BREVO_API_KEY),
-        "google_smtp_configured": bool(settings.GOOGLE_EMAIL and settings.GOOGLE_APP_PASSWORD),
-        "google_email": settings.GOOGLE_EMAIL,
+        "support_desk_active": True,
+        "team_relay_active": bool(email_provider.is_configured()),
     }
 
