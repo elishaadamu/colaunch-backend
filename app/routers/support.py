@@ -69,9 +69,14 @@ def _format_admin_escalation_email(
     blueprint = creator_context.get("blueprint", {})
     bp_name = blueprint.get("name", "Custom Platform") if isinstance(blueprint, dict) else str(blueprint)
     pricing = creator_context.get("pricing", "Standard tier")
+    
+    cid = creator_id or creator_context.get("id") or creator_context.get("creator_id") or creator_context.get("channelId") or ""
+    if not cid and clean_h:
+        cid = f"cr_{clean_h.lower()}"
+        
     base_url = (settings.FRONTEND_URL or "https://colaunch-web.vercel.app").rstrip("/")
-    dashboard_url = f"{base_url}/dashboard/{creator_id}" if creator_id else f"{base_url}/dashboard"
-    hub_url = f"{base_url}/{clean_h.lower()}/{creator_id}" if clean_h and creator_id else dashboard_url
+    dashboard_url = f"{base_url}/dashboard/{cid}" if cid else f"{base_url}/dashboard"
+    hub_url = f"{base_url}/{clean_h.lower()}/{cid}" if clean_h and cid else dashboard_url
 
     history_html = ""
     history_text = ""
@@ -188,9 +193,13 @@ def _format_creator_confirmation_email(
     blueprint = creator_context.get("blueprint", {})
     bp_name = blueprint.get("name", "Custom Platform") if isinstance(blueprint, dict) else str(blueprint)
     
+    cid = creator_id or creator_context.get("id") or creator_context.get("creator_id") or creator_context.get("channelId") or ""
+    if not cid and clean_h:
+        cid = f"cr_{clean_h.lower()}"
+
     base_url = (settings.FRONTEND_URL or "https://colaunch-web.vercel.app").rstrip("/")
-    dashboard_url = f"{base_url}/dashboard/{creator_id}" if creator_id else f"{base_url}/dashboard"
-    hub_url = f"{base_url}/{clean_h.lower()}/{creator_id}" if clean_h and creator_id else dashboard_url
+    dashboard_url = f"{base_url}/dashboard/{cid}" if cid else f"{base_url}/dashboard"
+    hub_url = f"{base_url}/{clean_h.lower()}/{cid}" if clean_h and cid else dashboard_url
 
     subject = f"[CoLaunch Support Ticket] Support Request Received · #{session_id}#{creator_id}#"
 
@@ -555,12 +564,14 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
     - Saves all messages to general support_messages table.
     """
     session_id = req.session_id or f"session_{uuid.uuid4().hex[:12]}"
-    creator_id = req.creator_id or ""
+    context = req.creator_context or {}
     raw_handle = req.creator_handle or ""
     clean_handle = raw_handle.lstrip("@").strip()
     display_handle = f"@{clean_handle}" if clean_handle else "@creator"
+    creator_id = (req.creator_id or context.get("id") or context.get("creator_id") or context.get("channelId") or "").strip()
+    if not creator_id and clean_handle:
+        creator_id = f"cr_{clean_handle.lower()}"
     creator_name = req.creator_name or "Creator"
-    context = req.creator_context or {}
     creator_email = (req.creator_email or context.get("email") or context.get("contactEmail") or "").strip()
 
     user_msg_id = req.id or str(uuid.uuid4())
@@ -794,10 +805,14 @@ def escalate_to_admin(req: SupportEscalateRequest, db: Session = Depends(get_db)
     Manually escalate a creator support thread to human operations team.
     """
     session_id = req.session_id or f"session_{uuid.uuid4().hex[:12]}"
-    creator_id = req.creator_id or ""
+    context = req.creator_context or {}
+    creator_id = (req.creator_id or context.get("id") or context.get("creator_id") or context.get("channelId") or "").strip()
+    if not creator_id and req.creator_handle:
+        clean_h = req.creator_handle.lstrip("@").strip().lower()
+        if clean_h:
+            creator_id = f"cr_{clean_h}"
     creator_handle = req.creator_handle or ""
     creator_name = req.creator_name or "Creator"
-    context = req.creator_context or {}
     creator_email = (req.creator_email or context.get("email") or context.get("contactEmail") or "").strip()
 
     recent = _fetch_history(session_id=session_id, creator_id=creator_id, limit=12, sql_db=db)
