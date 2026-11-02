@@ -6,6 +6,7 @@ and automated video/short/post publishing directly to YouTube.
 import os
 import json
 import time
+import base64
 import urllib.request
 import urllib.parse
 import urllib.error
