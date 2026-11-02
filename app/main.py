@@ -1475,3 +1475,55 @@ def serve_media_image(filename: str, db: Session = Depends(get_db)):
     return Response(content=db_image.image_bytes, media_type=db_image.content_type)
 
 
+# ── Buffer Proxy Endpoints ──────────────────────────────────────────────────
+@app.get("/api/buffer/status")
+def get_buffer_status():
+    """Returns status of Buffer integration without exposing sensitive token."""
+    from app.services.buffer_service import get_buffer_account, get_buffer_channels, get_buffer_token
+    token = get_buffer_token()
+    if not token:
+        return {"authenticated": False, "channels": [], "email": "", "organizationName": ""}
+    try:
+        acct = get_buffer_account()
+        channels = get_buffer_channels(acct.get("organizationId"))
+        return {
+            "authenticated": bool(acct.get("accountId")),
+            "email": acct.get("email") or "",
+            "organizationName": acct.get("organizationName") or "",
+            "channels": channels
+        }
+    except Exception as e:
+        return {"authenticated": False, "channels": [], "error": str(e)}
+
+
+@app.post("/api/buffer/posts")
+def create_buffer_post_proxy(payload: dict):
+    """Dispatches a post to Buffer."""
+    from fastapi import HTTPException
+    from app.services.buffer_service import create_buffer_post
+    channel_id = payload.get("channelId")
+    text = payload.get("text", "")
+    mode = payload.get("mode", "addToQueue")
+    scheduling_type = payload.get("schedulingType", "automatic")
+    due_at = payload.get("dueAt")
+    save_to_draft = payload.get("saveToDraft", False)
+    assets = payload.get("assets", [])
+
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="channelId is required")
+
+    try:
+        res = create_buffer_post(
+            channel_id=channel_id,
+            text=text,
+            mode=mode,
+            scheduling_type=scheduling_type,
+            due_at=due_at,
+            save_to_draft=save_to_draft,
+            assets=assets
+        )
+        return {"status": "success", "post": res}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
