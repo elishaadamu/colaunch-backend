@@ -1139,30 +1139,31 @@ def fetch_creator_channel_comments(handle_or_id: str, platform: str = "youtube",
         if not all_comments and token:
             try:
                 actor_id = "streamers~youtube-comments-scraper"
-                v_urls = [vid.get("url") or f"https://www.youtube.com/watch?v={vid.get('videoId')}" for vid in videos[:2] if vid.get("videoId") or vid.get("id")]
+                v_urls = [vid.get("url") or f"https://www.youtube.com/watch?v={vid.get('videoId')}" for vid in videos[:5] if vid.get("videoId") or vid.get("id")]
                 if not v_urls:
                     v_urls = [f"https://www.youtube.com/@{clean_handle}"]
                 run_input = {
                     "startUrls": [{"url": u} for u in v_urls],
-                    "maxComments": limit
+                    "maxComments": limit,
+                    "sortCommentsBy": "TOP_COMMENTS"
                 }
-                apify_items = _apify_run(actor_id, run_input, token, timeout_secs=35)
+                apify_items = _apify_run(actor_id, run_input, token, timeout_secs=45)
                 for c in apify_items:
                     if not isinstance(c, dict):
                         continue
-                    txt = (c.get("text") or c.get("commentText") or "").strip()
+                    txt = (c.get("text") or c.get("comment") or c.get("commentText") or "").strip()
                     if txt and txt not in seen_texts:
                         seen_texts.add(txt)
                         all_comments.append({
-                            "id": c.get("commentId") or c.get("id") or f"apify_{len(all_comments)}",
-                            "author": c.get("authorChannelName") or c.get("authorText") or c.get("author") or "@viewer",
+                            "id": c.get("cid") or c.get("commentId") or c.get("id") or f"apify_{len(all_comments)}",
+                            "author": c.get("author") or c.get("authorChannelName") or c.get("authorText") or "@viewer",
                             "text": txt,
                             "quote": txt,
-                            "likes": str(c.get("likesCount") or c.get("likeCount") or "0"),
-                            "published": c.get("publishedTimeText") or "Recent",
+                            "likes": str(c.get("voteCount") or c.get("likesCount") or c.get("likeCount") or "0"),
+                            "published": c.get("publishedTimeText") or c.get("published") or "Recent",
                             "videoId": c.get("videoId") or "",
-                            "videoTitle": c.get("videoTitle") or "Channel Upload",
-                            "videoUrl": c.get("videoUrl") or "",
+                            "videoTitle": c.get("title") or c.get("videoTitle") or "Channel Upload",
+                            "videoUrl": c.get("pageUrl") or c.get("videoUrl") or (f"https://www.youtube.com/watch?v={c.get('videoId')}" if c.get("videoId") else ""),
                             "source": f"Apify YouTube (@{clean_handle})",
                         })
                         if len(all_comments) >= limit:
