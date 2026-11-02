@@ -123,3 +123,4 @@ def create_buffer_post(
     if "message" in result and not result.get("post"):
         raise RuntimeError(f"Buffer post failed: {result['message']}")
     return result.get("post", {})
+
