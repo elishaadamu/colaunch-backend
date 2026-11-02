@@ -1458,36 +1458,122 @@ class UpdateProfileRequest(BaseModel):
     creator_data: Optional[Dict[str, Any]] = None
 
 
+@app.options("/api/auth/update-profile")
+def update_profile_options(request: Request):
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
 @app.post("/api/auth/update-profile")
-def update_profile(req: UpdateProfileRequest, db: Session = Depends(get_db)):
-    """Update profile email, password, and creator_data on MongoDB Atlas & SQLite."""
+def update_profile(req: UpdateProfileRequest, request: Request, db: Session = Depends(get_db)):
+    """Update or register profile email, password, and creator_data on MongoDB Atlas & SQLite."""
     from app.models.creator import UserProfile
     from fastapi import HTTPException
     from app.integrations.email_provider import email_provider
     from app.mongodb import get_collection
-    import logging
+    import re
+    import time
+    from datetime import datetime
+
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
 
     u_coll = get_collection("user_profiles")
-    m_user = u_coll.find_one({"username": req.username}) if u_coll is not None else None
-    user = db.query(UserProfile).filter(UserProfile.username == req.username).first()
+    norm_uname = req.username.strip()
+    norm_email = req.email.strip().lower() if (req.email and req.email.strip()) else None
 
+    # Search existing user across MongoDB Atlas by username, email, or handle
+    m_user = None
+    if u_coll is not None:
+        or_clauses = [{"username": norm_uname}, {"email": norm_uname.lower()}]
+        if norm_email:
+            or_clauses.append({"email": norm_email})
+        if req.creator_data and req.creator_data.get("handle"):
+            h = req.creator_data["handle"].replace("@", "").strip()
+            or_clauses.extend([{"username": h}, {"creator_data.handle": req.creator_data["handle"]}])
+        m_user = u_coll.find_one({"$or": or_clauses})
+
+    # Also search SQLite
+    user = db.query(UserProfile).filter(
+        (UserProfile.username == norm_uname) |
+        (UserProfile.email == norm_uname.lower()) |
+        *([(UserProfile.email == norm_email)] if norm_email else [])
+    ).first()
+
+    # ── CASE 1: USER DOES NOT EXIST YET -> REGISTER CREATOR AS OFFICIAL ACCOUNT ──
     if not user and not m_user:
-        raise HTTPException(status_code=404, detail="User not found")
+        clean_username = norm_uname
+        if not clean_username or clean_username in ["creator", "default", "creatorforgeweb"]:
+            if req.creator_data and req.creator_data.get("handle"):
+                clean_username = re.sub(r"[^a-zA-Z0-9_-]", "", req.creator_data["handle"].replace("@", ""))
+            elif norm_email and "@" in norm_email:
+                clean_username = norm_email.split("@")[0]
+            else:
+                clean_username = f"creator_{int(time.time())}"
 
+        pwd = req.password.strip() if req.password else ""
+        doc = {
+            "username": clean_username,
+            "email": norm_email or "",
+            "password": pwd,
+            "has_password": bool(pwd),
+            "creator_data": req.creator_data or {},
+            "created_at": datetime.utcnow()
+        }
+        if u_coll is not None:
+            u_coll.insert_one(doc)
+
+        try:
+            new_u = UserProfile(
+                username=clean_username,
+                email=norm_email or "",
+                password=pwd,
+                creator_data=req.creator_data or {}
+            )
+            db.add(new_u)
+            db.commit()
+        except Exception:
+            db.rollback()
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "username": clean_username,
+                "email": norm_email or "",
+                "has_password": bool(pwd),
+                "registered": True
+            },
+            headers=cors_headers
+        )
+
+    # ── CASE 2: USER EXISTS -> UPDATE ATTRIBUTES ──
+    target_username = m_user.get("username") if m_user else (user.username if user else norm_uname)
     mongo_updates = {}
-    new_email = req.email.strip().lower() if (req.email and req.email.strip()) else None
-    old_email = (user.email if user else (m_user.get("email") if m_user else "")) or ""
-    old_email = old_email.strip().lower()
+    new_email = norm_email
+    old_email = ((user.email if user else "") or (m_user.get("email") if m_user else "") or "").strip().lower()
 
     if new_email and new_email != old_email:
-        # Check if email is already taken in MongoDB Atlas
+        # Verify email conflict
         if u_coll is not None:
-            conflict = u_coll.find_one({"email": new_email, "username": {"$ne": req.username}})
+            conflict = u_coll.find_one({"email": new_email, "username": {"$ne": target_username}})
             if conflict:
                 raise HTTPException(status_code=400, detail="Email address already registered by another account")
-        # Check SQLite
         existing = db.query(UserProfile).filter(
-            (UserProfile.email == new_email) & (UserProfile.username != req.username)
+            (UserProfile.email == new_email) & (UserProfile.username != target_username)
         ).first()
         if existing:
             raise HTTPException(status_code=400, detail="Email address already registered by another account")
@@ -1496,7 +1582,7 @@ def update_profile(req: UpdateProfileRequest, db: Session = Depends(get_db)):
             user.email = new_email
         mongo_updates["email"] = new_email
 
-        # Send alert to OLD email address only if it was a real custom email
+        # Send alert if old email was genuine
         is_dummy_old_email = (
             not old_email or 
             old_email == "creatorforgeweb@gmail.com" or 
@@ -1504,24 +1590,25 @@ def update_profile(req: UpdateProfileRequest, db: Session = Depends(get_db)):
         )
         if not is_dummy_old_email:
             subject = "CoLaunch - Security Alert: Email Address Changed"
-            body_text = f"Hello {req.username},\n\nThe email address associated with your CoLaunch account has been updated from {old_email} to {new_email}."
+            body_text = f"Hello {target_username},\n\nThe email address associated with your CoLaunch account has been updated from {old_email} to {new_email}."
             body_html = f"""
             <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #1f2937; border-radius: 16px; background-color: #0b0b0b; color: #f3f4f6;">
                 <h2 style="color: #06b6d4;">COLAUNCH SECURITY NOTICE</h2>
-                <p>Hello <strong>{req.username}</strong>,</p>
+                <p>Hello <strong>{target_username}</strong>,</p>
                 <p>Your account login email was updated to <strong>{new_email}</strong>.</p>
             </div>
             """
             try:
                 email_provider.send(to_email=old_email, subject=subject, body_html=body_html, body_text=body_text)
             except Exception as e:
-                logging.error(f"Failed to send email change notification: {str(e)}")
+                logger.error(f"Failed to send email change notification: {str(e)}")
 
     if req.password and req.password.strip():
         pwd = req.password.strip()
         if user:
             user.password = pwd
         mongo_updates["password"] = pwd
+        mongo_updates["has_password"] = True
 
     if req.creator_data is not None:
         if user:
@@ -1530,61 +1617,191 @@ def update_profile(req: UpdateProfileRequest, db: Session = Depends(get_db)):
 
     # Commit SQLite
     if user:
-        db.commit()
-        db.refresh(user)
+        try:
+            db.commit()
+            db.refresh(user)
+        except Exception:
+            db.rollback()
 
     # Commit MongoDB Atlas
     if u_coll is not None and mongo_updates:
-        u_coll.update_one({"username": req.username}, {"$set": mongo_updates}, upsert=True)
+        u_coll.update_one({"username": target_username}, {"$set": mongo_updates}, upsert=True)
 
-    return {
-        "status": "success",
-        "username": req.username,
-        "email": new_email or old_email,
-        "has_password": bool((user and user.password) or (m_user and m_user.get("password")) or req.password)
-    }
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "username": target_username,
+            "email": new_email or old_email,
+            "has_password": bool((user and user.password) or (m_user and m_user.get("password")) or (req.password and req.password.strip()))
+        },
+        headers=cors_headers
+    )
 
 
 # ── Admin Control APIs ────────────────────────────────────────────────────────
-@app.get("/api/admin/users")
-def list_admin_users(db: Session = Depends(get_db)):
-    """List all registered users for admin control panel."""
-    from app.models.creator import UserProfile
-    users = db.query(UserProfile).order_by(UserProfile.created_at.desc()).all()
-    out = []
-    for u in users:
-        platform = None
-        handle = None
-        if u.creator_data and isinstance(u.creator_data, dict):
-            platform = u.creator_data.get("platform")
-            handle = u.creator_data.get("handle")
-        
-        has_ai_keys = False
-        if u.ai_keys and isinstance(u.ai_keys, dict):
-            has_ai_keys = any(bool(v) for v in u.ai_keys.values())
+@app.options("/api/admin/users")
+def list_admin_users_options(request: Request):
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
-        out.append({
-            "username": u.username,
-            "email": u.email,
-            "platform": platform,
-            "handle": handle,
-            "has_ai_keys": has_ai_keys,
-            "created_at": u.created_at.isoformat() if u.created_at else None
-        })
-    return {"status": "success", "users": out}
+
+@app.get("/api/admin/users")
+def list_admin_users(request: Request, db: Session = Depends(get_db)):
+    """List all registered users from MongoDB Atlas user_profiles and SQLite."""
+    from app.models.creator import UserProfile
+    from app.mongodb import get_collection
+
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
+
+    out = []
+    seen = set()
+
+    # 1. Fetch all registered users from MongoDB Atlas user_profiles (primary database)
+    u_coll = get_collection("user_profiles")
+    if u_coll is not None:
+        try:
+            for u in u_coll.find({}).sort("_id", -1):
+                uname = u.get("username")
+                email = u.get("email") or ""
+                key = (uname or "").lower() or email.lower()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+
+                c_data = u.get("creator_data") or {}
+                has_ai_keys = False
+                ai_keys = u.get("ai_keys")
+                if isinstance(ai_keys, dict):
+                    has_ai_keys = any(bool(v) for v in ai_keys.values())
+
+                created = u.get("created_at")
+                created_str = created.isoformat() if hasattr(created, "isoformat") else str(created) if created else None
+                if not created_str and "_id" in u:
+                    try:
+                        created_str = u["_id"].generation_time.isoformat()
+                    except Exception:
+                        pass
+
+                out.append({
+                    "username": uname or (email.split("@")[0] if email else "creator"),
+                    "email": email,
+                    "platform": c_data.get("platform") or "creator",
+                    "handle": c_data.get("handle") or c_data.get("name") or uname,
+                    "has_ai_keys": has_ai_keys,
+                    "has_password": bool(u.get("password") or u.get("has_password")),
+                    "created_at": created_str
+                })
+        except Exception as e:
+            logger.error(f"Error fetching MongoDB Atlas user_profiles: {e}")
+
+    # 2. Merge with any SQLite users
+    try:
+        users = db.query(UserProfile).order_by(UserProfile.created_at.desc()).all()
+        for u in users:
+            key = (u.username or "").lower() or (u.email or "").lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+
+            platform = None
+            handle = None
+            if u.creator_data and isinstance(u.creator_data, dict):
+                platform = u.creator_data.get("platform")
+                handle = u.creator_data.get("handle") or u.creator_data.get("name")
+
+            has_ai_keys = False
+            if u.ai_keys and isinstance(u.ai_keys, dict):
+                has_ai_keys = any(bool(v) for v in u.ai_keys.values())
+
+            out.append({
+                "username": u.username,
+                "email": u.email or "",
+                "platform": platform or "creator",
+                "handle": handle or u.username,
+                "has_ai_keys": has_ai_keys,
+                "has_password": bool(u.password),
+                "created_at": u.created_at.isoformat() if u.created_at else None
+            })
+    except Exception as e:
+        logger.error(f"Error fetching SQLite users: {e}")
+
+    return JSONResponse(
+        status_code=200,
+        content={"status": "success", "users": out},
+        headers=cors_headers
+    )
+
+
+@app.options("/api/admin/users/{username}")
+def delete_admin_user_options(username: str, request: Request):
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 
 @app.delete("/api/admin/users/{username}")
-def delete_admin_user(username: str, db: Session = Depends(get_db)):
-    """Delete a user profile."""
+def delete_admin_user(username: str, request: Request, db: Session = Depends(get_db)):
+    """Delete a user profile from MongoDB Atlas and SQLite."""
     from app.models.creator import UserProfile
+    from app.mongodb import get_collection
     from fastapi import HTTPException
-    user = db.query(UserProfile).filter(UserProfile.username == username).first()
-    if not user:
+
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
+
+    deleted = False
+    u_coll = get_collection("user_profiles")
+    if u_coll is not None:
+        res = u_coll.delete_many({"$or": [{"username": username}, {"email": username.lower()}]})
+        if res.deleted_count > 0:
+            deleted = True
+
+    try:
+        user = db.query(UserProfile).filter(
+            (UserProfile.username == username) | (UserProfile.email == username.lower())
+        ).first()
+        if user:
+            db.delete(user)
+            db.commit()
+            deleted = True
+    except Exception:
+        db.rollback()
+
+    if not deleted:
         raise HTTPException(status_code=404, detail="User not found")
-    db.delete(user)
-    db.commit()
-    return {"status": "success", "message": f"User {username} deleted."}
+
+    return JSONResponse(
+        status_code=200,
+        content={"status": "success", "message": f"User {username} deleted."},
+        headers=cors_headers
+    )
 
 
 @app.get("/api/admin/system-stats")
