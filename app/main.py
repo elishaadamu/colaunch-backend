@@ -1546,7 +1546,12 @@ def exchange_youtube_token_endpoint(payload: dict, request: Request):
                 "status": "success",
                 "connected": True,
                 "channel": connection.get("channel"),
-                "connected_at": connection.get("connected_at")
+                "connected_at": connection.get("connected_at"),
+                "tokens": {
+                    "access_token": access_token,
+                    "refresh_token": token_data.get("refresh_token"),
+                    "expires_in": token_data.get("expires_in")
+                }
             },
             headers=cors_headers
         )
@@ -1560,26 +1565,53 @@ def exchange_youtube_token_endpoint(payload: dict, request: Request):
 
 
 @app.get("/api/youtube/status")
-def get_youtube_status_endpoint(identifier: str = "default"):
+def get_youtube_status_endpoint(identifier: str = "default", request: Request = None):
     """Returns the YouTube connection status and channel metadata."""
     from app.services.youtube_service import get_youtube_connection
     try:
-        return get_youtube_connection(identifier)
+        conn = get_youtube_connection(identifier)
+        return conn
     except Exception as e:
         return {"connected": False, "channel": None, "error": str(e)}
 
 
+@app.options("/api/youtube/publish")
+def publish_youtube_options(request: Request):
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
 @app.post("/api/youtube/publish")
-def publish_to_youtube_endpoint(payload: dict):
+def publish_to_youtube_endpoint(payload: dict, request: Request):
     """Directly publishes or schedules a post to the authenticated YouTube channel."""
     from app.services.youtube_service import publish_youtube_post
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
+
     identifier = payload.get("identifier", "default")
     title = payload.get("title", "New YouTube Video")
     description = payload.get("description", "")
     privacy = payload.get("privacy", "public")
     tags = payload.get("tags", [])
     video_url = payload.get("video_url")
+    video_base64 = payload.get("video_base64")
+    publish_at = payload.get("publish_at")
     is_short = payload.get("is_short", False)
+    access_token = payload.get("access_token")
+    refresh_token = payload.get("refresh_token")
 
     try:
         res = publish_youtube_post(
@@ -1589,21 +1621,63 @@ def publish_to_youtube_endpoint(payload: dict):
             privacy=privacy,
             tags=tags,
             video_url=video_url,
-            is_short=is_short
+            video_base64=video_base64,
+            publish_at=publish_at,
+            is_short=is_short,
+            access_token=access_token,
+            refresh_token=refresh_token
         )
-        return {"status": "success", "result": res}
+        return JSONResponse(
+            status_code=200,
+            content={"status": "success", "result": res},
+            headers=cors_headers
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"[YouTube Publish API] Failed: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": str(e)},
+            headers=cors_headers
+        )
+
+
+@app.options("/api/youtube/disconnect")
+def disconnect_youtube_options(request: Request):
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 
 @app.delete("/api/youtube/disconnect")
-def disconnect_youtube_endpoint(identifier: str = "default"):
+def disconnect_youtube_endpoint(identifier: str = "default", request: Request = None):
     """Disconnects the authenticated YouTube account."""
     from app.services.youtube_service import disconnect_youtube
+    origin = (request.headers.get("origin") if request else None) or "https://colaunch-web.vercel.app"
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
     try:
         disconnect_youtube(identifier)
-        return {"status": "success", "disconnected": True}
+        return JSONResponse(
+            status_code=200,
+            content={"status": "success", "disconnected": True},
+            headers=cors_headers
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "detail": str(e)},
+            headers=cors_headers
+        )
 
 

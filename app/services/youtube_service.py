@@ -309,104 +309,158 @@ def disconnect_youtube(identifier: str = "default") -> bool:
 
 
 def publish_youtube_post(
-    identifier: str,
-    title: str,
-    description: str,
+    identifier: str = "default",
+    title: str = "New YouTube Video",
+    description: str = "",
     privacy: str = "public",
     tags: Optional[List[str]] = None,
     video_url: Optional[str] = None,
-    is_short: bool = False
+    video_base64: Optional[str] = None,
+    video_bytes: Optional[bytes] = None,
+    publish_at: Optional[str] = None,
+    is_short: bool = False,
+    access_token: Optional[str] = None,
+    refresh_token: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Publishes or queues content directly to the user's authenticated YouTube channel.
-    If a video file or public URL is provided, streams the video to YouTube via resumable upload.
-    If no media is attached, creates a verified scheduled post entry in the calendar.
+    Publishes or schedules an authentic video directly to the creator's YouTube channel via YouTube Data API v3.
+    Requires an actual video file (.mp4, .mov) or public streamable video URL.
     """
-    conn = get_youtube_connection(identifier)
-    if not conn.get("connected"):
-        raise RuntimeError("No YouTube Channel is currently connected via Google OAuth. Please authorize first.")
+    clean_id = (identifier or "default").replace("@", "").lower().strip()
+    conn = get_youtube_connection(clean_id)
+    
+    # Resolve valid access token (from argument, memory, or refresh)
+    effective_token = access_token
+    effective_refresh = refresh_token
+    
+    if not effective_token:
+        tokens = _CONNECTED_CHANNELS.get(clean_id, {}).get("tokens", {}) or _CONNECTED_CHANNELS.get("default", {}).get("tokens", {})
+        effective_token = tokens.get("access_token")
+        effective_refresh = effective_refresh or tokens.get("refresh_token")
+        expires_at = tokens.get("expires_at", 0)
+        if time.time() > (expires_at - 180) and effective_refresh:
+            try:
+                refreshed = refresh_access_token(effective_refresh)
+                effective_token = refreshed.get("access_token")
+            except Exception as e:
+                logger.warn(f"[YouTube Service] Token refresh failed: {e}")
 
-    tokens = _CONNECTED_CHANNELS.get(identifier, {}).get("tokens", {}) or _CONNECTED_CHANNELS.get("default", {}).get("tokens", {})
-    access_token = tokens.get("access_token")
-    if not access_token:
-        raise RuntimeError("YouTube access token missing. Please re-authenticate.")
+    if not effective_token:
+        raise RuntimeError("No active YouTube access token found. Please connect your YouTube account in Accounts.")
 
-    channel = conn.get("channel", {})
+    channel = conn.get("channel", {}) or {}
     channel_title = channel.get("title", "YouTube Channel")
 
-    # If video_url is provided, execute YouTube Data API v3 upload
-    if video_url:
+    # YouTube Data API requires a video binary. Pure text cannot be posted via YouTube API.
+    resolved_bytes: Optional[bytes] = None
+    if video_bytes:
+        resolved_bytes = video_bytes
+    elif video_base64:
         try:
-            # Metadata snippet
-            snippet = {
-                "title": title[:100],
-                "description": description[:5000],
-                "tags": tags or ["launch", "exclusive"],
-                "categoryId": "22"  # People & Blogs
-            }
-            if is_short:
-                if "#Shorts" not in snippet["description"]:
-                    snippet["description"] += "\n\n#Shorts"
+            # Handle data:video/mp4;base64,... header if present
+            raw_b64 = video_base64.split(",")[-1] if "," in video_base64 else video_base64
+            resolved_bytes = base64.b64decode(raw_b64)
+        except Exception as e:
+            raise ValueError(f"Invalid video base64 data: {e}")
+    elif video_url:
+        try:
+            req = urllib.request.Request(video_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                resolved_bytes = resp.read()
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch video from URL: {e}")
 
-            status = {
-                "privacyStatus": privacy if privacy in ["public", "private", "unlisted"] else "public",
-                "selfDeclaredMadeForKids": False
-            }
+    if not resolved_bytes or len(resolved_bytes) < 1000:
+        raise ValueError(
+            "YouTube Data API requires a video file (.mp4/.mov). "
+            "Please attach or upload a video file to publish to your YouTube channel."
+        )
 
-            # Resumable upload init
-            init_url = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
-            init_body = json.dumps({"snippet": snippet, "status": status}).encode("utf-8")
-            init_headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json; charset=UTF-8",
-                "X-Upload-Content-Type": "video/*",
-            }
-
-            init_req = urllib.request.Request(init_url, data=init_body, headers=init_headers, method="POST")
-            with urllib.request.urlopen(init_req, timeout=20) as init_resp:
-                upload_location = init_resp.headers.get("Location")
-
-            if upload_location:
-                # Stream the video from the public storage URL (S3, Cloudinary, etc.)
-                video_download_req = urllib.request.Request(video_url)
-                with urllib.request.urlopen(video_download_req, timeout=60) as video_stream:
-                    video_bytes = video_stream.read()
-
-                upload_req = urllib.request.Request(
-                    upload_location,
-                    data=video_bytes,
-                    headers={
-                        "Content-Type": "video/*",
-                        "Content-Length": str(len(video_bytes))
-                    },
-                    method="PUT"
-                )
-                with urllib.request.urlopen(upload_req, timeout=120) as upload_resp:
-                    upload_result = json.loads(upload_resp.read().decode("utf-8"))
-                    video_id = upload_result.get("id")
-                    return {
-                        "status": "published",
-                        "videoId": video_id,
-                        "url": f"https://www.youtube.com/watch?v={video_id}",
-                        "title": title,
-                        "channel": channel_title,
-                        "privacy": privacy
-                    }
-        except Exception as upload_err:
-            logger.error(f"[YouTube Upload] Upload error: {upload_err}")
-            # Fall back to queueing post with error notice
-            return {
-                "status": "queued",
-                "notice": f"Video upload initiated. Background worker verifying asset: {str(upload_err)[:100]}",
-                "title": title,
-                "channel": channel_title
-            }
-
-    # If pure text/post or draft without attached binary file:
-    return {
-        "status": "published",
-        "title": title,
-        "channel": channel_title,
-        "message": f"Successfully published to {channel_title}",
-        "published_at": time.time()
+    # Prepare YouTube Video Snippet metadata
+    snippet = {
+        "title": title[:100] if title else "New Video",
+        "description": description[:5000] if description else "",
+        "tags": tags or ["launch", "exclusive"],
+        "categoryId": "22"  # People & Blogs
     }
+    if is_short and "#Shorts" not in snippet["description"]:
+        snippet["description"] += "\n\n#Shorts"
+
+    # Status & Scheduling configuration
+    status: Dict[str, Any] = {
+        "selfDeclaredMadeForKids": False
+    }
+    if publish_at:
+        # Scheduled publish: must be private with publishAt in ISO 8601 / RFC 3339
+        status["privacyStatus"] = "private"
+        status["publishAt"] = publish_at
+    else:
+        status["privacyStatus"] = privacy if privacy in ["public", "private", "unlisted"] else "public"
+
+    # Initialize Resumable Upload with Google YouTube Data API v3
+    init_url = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
+    init_body = json.dumps({"snippet": snippet, "status": status}).encode("utf-8")
+    init_headers = {
+        "Authorization": f"Bearer {effective_token}",
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Type": "video/mp4",
+        "X-Upload-Content-Length": str(len(resolved_bytes)),
+    }
+
+    try:
+        init_req = urllib.request.Request(init_url, data=init_body, headers=init_headers, method="POST")
+        with urllib.request.urlopen(init_req, timeout=30) as init_resp:
+            upload_location = init_resp.headers.get("Location")
+    except urllib.error.HTTPError as e:
+        if e.code == 401 and effective_refresh:
+            logger.info("[YouTube Upload] Token expired (401), attempting refresh...")
+            try:
+                refreshed = refresh_access_token(effective_refresh)
+                effective_token = refreshed.get("access_token")
+                init_headers["Authorization"] = f"Bearer {effective_token}"
+                init_req = urllib.request.Request(init_url, data=init_body, headers=init_headers, method="POST")
+                with urllib.request.urlopen(init_req, timeout=30) as init_resp:
+                    upload_location = init_resp.headers.get("Location")
+            except Exception as ref_err:
+                logger.error(f"[YouTube Upload] Token refresh retry failed: {ref_err}")
+                err_body = e.read().decode("utf-8") if e.fp else str(e)
+                raise RuntimeError(f"Google YouTube Auth Expired: {err_body}")
+        else:
+            err_body = e.read().decode("utf-8") if e.fp else str(e)
+            logger.error(f"[YouTube Upload] Google upload init failed: {err_body}")
+            raise RuntimeError(f"Google YouTube Upload Init Failed: {err_body}")
+
+    if not upload_location:
+        raise RuntimeError("Google did not return a resumable upload location URL.")
+
+    # Stream the video bytes to Google's resumable upload endpoint
+    upload_req = urllib.request.Request(
+        upload_location,
+        data=resolved_bytes,
+        headers={
+            "Content-Type": "video/mp4",
+            "Content-Length": str(len(resolved_bytes))
+        },
+        method="PUT"
+    )
+
+    try:
+        with urllib.request.urlopen(upload_req, timeout=180) as upload_resp:
+            upload_result = json.loads(upload_resp.read().decode("utf-8"))
+            video_id = upload_result.get("id")
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            return {
+                "status": "published",
+                "videoId": video_id,
+                "url": video_url,
+                "title": title,
+                "channel": channel_title,
+                "privacy": status.get("privacyStatus"),
+                "scheduled": bool(publish_at),
+                "publishAt": publish_at,
+                "uploaded_at": time.time()
+            }
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8") if e.fp else str(e)
+        logger.error(f"[YouTube Upload] Video upload streaming failed: {err_body}")
+        raise RuntimeError(f"Google YouTube Upload Failed: {err_body}")
