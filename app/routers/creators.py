@@ -994,16 +994,24 @@ def delete_creator(
         raise HTTPException(500, "MongoDB unavailable")
 
     clean_handle = creator_id.lstrip("@").strip().lower()
-    doc = coll.find_one({
-        "$or": [
-            {"_id": creator_id},
-            {"id": creator_id},
-            {"handle": clean_handle},
-            {"handle": f"@{clean_handle}"},
-            {"handle": {"$regex": f"^{clean_handle}$", "$options": "i"}},
-            {"email_public": creator_id.strip()}
-        ]
-    })
+    
+    query_or = [
+        {"_id": creator_id},
+        {"id": creator_id},
+        {"handle": clean_handle},
+        {"handle": f"@{clean_handle}"},
+        {"handle": {"$regex": f"^{clean_handle}$", "$options": "i"}},
+        {"email_public": creator_id.strip()}
+    ]
+
+    try:
+        from bson import ObjectId
+        if ObjectId.is_valid(creator_id):
+            query_or.append({"_id": ObjectId(creator_id)})
+    except Exception:
+        pass
+
+    doc = coll.find_one({"$or": query_or})
     
     del_count = 0
     target_ids = {creator_id}
@@ -1011,8 +1019,25 @@ def delete_creator(
         doc_id = doc.get("id") or str(doc.get("_id", ""))
         if doc_id:
             target_ids.add(doc_id)
+        if doc.get("handle"):
+            clean_handle = doc.get("handle").lstrip("@").strip().lower()
         del_res = coll.delete_one({"_id": doc["_id"]})
         del_count = del_res.deleted_count
+    else:
+        # Fallback direct deletion attempts
+        try:
+            from bson import ObjectId
+            if ObjectId.is_valid(creator_id):
+                coll.delete_one({"_id": ObjectId(creator_id)})
+        except Exception:
+            pass
+        coll.delete_many({
+            "$or": [
+                {"id": creator_id},
+                {"handle": clean_handle},
+                {"handle": f"@{clean_handle}"}
+            ]
+        })
 
     # Cascade delete in MongoDB collections
     query_filters = []
