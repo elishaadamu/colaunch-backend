@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Any, Union
 from fastapi import FastAPI, Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, Response, FileResponse
+from fastapi.responses import HTMLResponse, Response, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from pathlib import Path
@@ -1487,14 +1487,36 @@ def get_youtube_auth_url_endpoint(redirect_uri: Optional[str] = None, state: Opt
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.options("/api/youtube/exchange-token")
+def exchange_youtube_token_options(request: Request):
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
 @app.post("/api/youtube/exchange-token")
-def exchange_youtube_token_endpoint(payload: dict):
+def exchange_youtube_token_endpoint(payload: dict, request: Request):
     """Exchanges Google authorization code for persistent tokens and retrieves channel profile."""
     from app.services.youtube_service import (
         exchange_code_for_tokens,
         fetch_channel_profile,
         save_youtube_connection
     )
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
+
     code = payload.get("code")
     redirect_uri = payload.get("redirect_uri")
     identifier = payload.get("identifier", "default")
@@ -1502,7 +1524,11 @@ def exchange_youtube_token_endpoint(payload: dict):
     client_secret = payload.get("client_secret")
 
     if not code:
-        raise HTTPException(status_code=400, detail="Authorization code is required")
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "Authorization code is required"},
+            headers=cors_headers
+        )
 
     try:
         token_data = exchange_code_for_tokens(
@@ -1514,15 +1540,23 @@ def exchange_youtube_token_endpoint(payload: dict):
         access_token = token_data.get("access_token")
         channel_profile = fetch_channel_profile(access_token)
         connection = save_youtube_connection(identifier, token_data, channel_profile)
-        return {
-            "status": "success",
-            "connected": True,
-            "channel": connection.get("channel"),
-            "connected_at": connection.get("connected_at")
-        }
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "connected": True,
+                "channel": connection.get("channel"),
+                "connected_at": connection.get("connected_at")
+            },
+            headers=cors_headers
+        )
     except Exception as e:
         logger.error(f"[YouTube OAuth] Token exchange error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": str(e)},
+            headers=cors_headers
+        )
 
 
 @app.get("/api/youtube/status")
