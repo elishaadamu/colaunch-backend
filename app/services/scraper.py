@@ -398,19 +398,79 @@ def apify_scrape_youtube_channels(channels: list, apify_token: str = None, timeo
     return results
 
 
+def live_market_search(keyword: str, max_results: int = 10) -> list:
+    """
+    Performs live public web search for market competitor intelligence.
+    Extracts real titles, URLs, and snippets from search engine results.
+    """
+    import urllib.request, urllib.parse, re, html
+    if not keyword or not str(keyword).strip():
+        return []
+
+    clean_kw = str(keyword).strip()
+    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(clean_kw)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5"
+        }
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            page = resp.read().decode("utf-8", errors="ignore")
+
+        blocks = page.split('<div class="result results_links results_links_deep web-result')
+        results = []
+        for b in blocks[1:]:
+            t_match = re.search(r'<a[^>]+class=[\"\']result__a[\"\'][^>]*href=[\"\']([^\"\']+)[\"\'][^>]*>(.*?)</a>', b)
+            s_match = re.search(r'<a[^>]+class=[\"\']result__snippet[\"\'][^>]*>(.*?)</a>', b)
+            if t_match:
+                raw_url = t_match.group(1)
+                actual_url = raw_url
+                if "uddg=" in raw_url:
+                    actual_url = urllib.parse.unquote(raw_url.split("uddg=")[1].split("&")[0])
+                elif raw_url.startswith("//"):
+                    actual_url = "https:" + raw_url
+
+                t_text = html.unescape(re.sub(r'<[^>]+>', '', t_match.group(2))).strip()
+                s_text = html.unescape(re.sub(r'<[^>]+>', '', s_match.group(1))).strip() if s_match else ""
+
+                if t_text:
+                    results.append({
+                        "title": t_text,
+                        "url": actual_url,
+                        "snippet": s_text,
+                        "description": s_text,
+                        "source": "Live Market Search"
+                    })
+                if len(results) >= max_results:
+                    break
+
+        return results
+    except Exception as e:
+        logger.warning(f"[MarketSearch] Live search notice: {e}")
+        return []
+
+
 def apify_google_search(keyword: str, apify_token: str = None, timeout_secs: int = 45) -> list:
     """
-    Run Apify Google Search Scraper Actor (563JCPLOqM1kMmbbP).
-    Input format:
-    {
-        "keyword": keyword,
-        "include_merged": True,
-        "limit": "all"
-    }
+    Run Apify Google Search Scraper Actor (563JCPLOqM1kMmbbP) with automatic fallback
+    to live market web search if Apify limits or errors occur.
     """
     from app.config import settings
     token = apify_token or settings.APIFY_API_KEY
-    if not token or not keyword:
+    if not keyword:
+        return []
+
+    # First attempt live market search for immediate, paywall-free results
+    live_items = live_market_search(keyword, max_results=10)
+    if live_items:
+        return live_items
+
+    if not token:
         return []
 
     actor_id = getattr(settings, "APIFY_GOOGLE_SEARCH_ACTOR", "563JCPLOqM1kMmbbP")
@@ -420,8 +480,18 @@ def apify_google_search(keyword: str, apify_token: str = None, timeout_secs: int
         "limit": "all"
     }
 
-    raw_items = _apify_run(actor_id, run_input, token, timeout_secs=timeout_secs)
-    return raw_items if isinstance(raw_items, list) else []
+    try:
+        raw_items = _apify_run(actor_id, run_input, token, timeout_secs=timeout_secs)
+        if isinstance(raw_items, list) and len(raw_items) > 0:
+            # Check if actor returned quota/free tier error
+            if isinstance(raw_items[0], dict) and raw_items[0].get("error"):
+                logger.warning(f"[Apify Google] Actor returned error: {raw_items[0]['error']}. Falling back to live search.")
+                return live_market_search(keyword, max_results=10)
+            return raw_items
+    except Exception as err:
+        logger.warning(f"[Apify Google] Search error: {err}")
+
+    return live_market_search(keyword, max_results=10)
 
 
 def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:

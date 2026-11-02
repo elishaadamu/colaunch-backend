@@ -227,6 +227,14 @@ def hunter_verify_email_endpoint(body: HunterVerifyEmailRequest, db: Session = D
     return res
 
 
+@router.get("/market-search")
+def search_market_intel(q: str):
+    """Live public market competitor intelligence search."""
+    from app.services.scraper import apify_google_search
+    results = apify_google_search(q)
+    return {"query": q, "results": results, "count": len(results)}
+
+
 @router.post("/scrape")
 def scrape_creator(request: Request, body: ScrapeRequest, actor: str = "internal"):
     """
