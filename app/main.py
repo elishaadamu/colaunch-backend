@@ -1659,6 +1659,8 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
     """List all registered users from MongoDB Atlas user_profiles and SQLite."""
     from app.models.creator import UserProfile
     from app.mongodb import get_collection
+    import json
+    import traceback
 
     origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
     cors_headers = {
@@ -1675,41 +1677,112 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
     u_coll = get_collection("user_profiles")
     if u_coll is not None:
         try:
-            for u in u_coll.find({}).sort("_id", -1):
-                uname = u.get("username")
-                email = u.get("email") or ""
-                key = (uname or "").lower() or email.lower()
-                if not key or key in seen:
-                    continue
-                seen.add(key)
+            # Query documents safely without cursor-side sort that can fail on mixed BSON types
+            docs = list(u_coll.find({}))
+            for u in docs:
+                try:
+                    raw_id = str(u.get("_id", "")).strip()
+                    uname = u.get("username")
+                    email = (u.get("email") or "").strip().lower()
 
-                c_data = u.get("creator_data") or {}
-                has_ai_keys = False
-                ai_keys = u.get("ai_keys")
-                if isinstance(ai_keys, dict):
-                    has_ai_keys = any(bool(v) for v in ai_keys.values())
+                    # Creator data safely parsed if string or dict
+                    c_data = u.get("creator_data")
+                    if isinstance(c_data, str):
+                        try:
+                            c_data = json.loads(c_data)
+                        except Exception:
+                            c_data = {}
+                    elif not isinstance(c_data, dict):
+                        c_data = {}
 
-                created = u.get("created_at")
-                created_str = created.isoformat() if hasattr(created, "isoformat") else str(created) if created else None
-                if not created_str and "_id" in u:
-                    try:
-                        created_str = u["_id"].generation_time.isoformat()
-                    except Exception:
-                        pass
+                    # If email is missing, check creator_data
+                    if not email and isinstance(c_data, dict):
+                        email = (c_data.get("email") or c_data.get("contactEmail") or "").strip().lower()
 
-                out.append({
-                    "username": uname or (email.split("@")[0] if email else "creator"),
-                    "email": email,
-                    "platform": c_data.get("platform") or "creator",
-                    "handle": c_data.get("handle") or c_data.get("name") or uname,
-                    "has_ai_keys": has_ai_keys,
-                    "has_password": bool(u.get("password") or u.get("has_password")),
-                    "created_at": created_str
-                })
+                    # Fallbacks for username
+                    if not uname or uname in ("default", "creator"):
+                        if email and "@" in email:
+                            uname = email.split("@")[0]
+                        elif raw_id and not raw_id.startswith("ObjectId"):
+                            uname = raw_id
+                        elif c_data.get("handle"):
+                            uname = c_data["handle"].replace("@", "")
+                        elif u.get("name"):
+                            uname = u["name"]
+                        else:
+                            uname = "creator"
+
+                    key = (uname.lower() if uname else "") or email
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    if email:
+                        seen.add(email)
+
+                    has_ai_keys = False
+                    ai_keys = u.get("ai_keys")
+                    if isinstance(ai_keys, dict):
+                        has_ai_keys = any(bool(v) for v in ai_keys.values())
+
+                    created = u.get("created_at")
+                    created_str = created.isoformat() if hasattr(created, "isoformat") else str(created) if created else None
+                    if not created_str and "_id" in u and hasattr(u["_id"], "generation_time"):
+                        try:
+                            created_str = u["_id"].generation_time.isoformat()
+                        except Exception:
+                            pass
+
+                    platform = c_data.get("platform") or u.get("platform") or ("youtube" if (c_data.get("youtube_connected") or c_data.get("channel_title")) else "creator")
+                    handle = c_data.get("handle") or c_data.get("name") or c_data.get("channel_title") or u.get("name") or uname
+                    if isinstance(handle, str) and handle.startswith("@"):
+                        handle = handle[1:]
+
+                    out.append({
+                        "username": uname,
+                        "email": email,
+                        "platform": platform or "creator",
+                        "handle": handle or uname,
+                        "has_ai_keys": has_ai_keys,
+                        "has_password": bool(u.get("password") or u.get("has_password") or u.get("hashed_password")),
+                        "created_at": created_str
+                    })
+                except Exception as doc_err:
+                    logger.error(f"[Admin Users] Error parsing MongoDB user_profiles document: {doc_err}")
         except Exception as e:
-            logger.error(f"Error fetching MongoDB Atlas user_profiles: {e}")
+            logger.error(f"Error fetching MongoDB Atlas user_profiles: {e}\n{traceback.format_exc()}")
 
-    # 2. Merge with any SQLite users
+    # 2. Also check if any creator in 'creators' collection was registered with email & password
+    c_coll = get_collection("creators")
+    if c_coll is not None:
+        try:
+            for c in c_coll.find({"$or": [{"email": {"$exists": True, "$ne": ""}}, {"contactEmail": {"$exists": True, "$ne": ""}}]}):
+                try:
+                    c_email = (c.get("email") or c.get("contactEmail") or "").strip().lower()
+                    if not c_email or c_email in seen:
+                        continue
+                    c_handle = c.get("handle") or c.get("name") or c_email.split("@")[0]
+                    c_uname = re.sub(r"[^a-zA-Z0-9_-]", "", c_handle.replace("@", "")) or c_email.split("@")[0]
+                    key = c_uname.lower() or c_email
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    seen.add(c_email)
+
+                    out.append({
+                        "username": c_uname,
+                        "email": c_email,
+                        "platform": c.get("platform") or "youtube",
+                        "handle": c_handle.replace("@", "") if isinstance(c_handle, str) else str(c_handle),
+                        "has_ai_keys": False,
+                        "has_password": bool(c.get("password") or c.get("has_password")),
+                        "created_at": c.get("created_at").isoformat() if hasattr(c.get("created_at"), "isoformat") else str(c.get("created_at")) if c.get("created_at") else None
+                    })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # 3. Merge with SQLite users
     try:
         users = db.query(UserProfile).order_by(UserProfile.created_at.desc()).all()
         for u in users:
@@ -1739,6 +1812,9 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
             })
     except Exception as e:
         logger.error(f"Error fetching SQLite users: {e}")
+
+    # Sort users newest first
+    out.sort(key=lambda x: x.get("created_at") or "", reverse=True)
 
     return JSONResponse(
         status_code=200,
@@ -1779,9 +1855,19 @@ def delete_admin_user(username: str, request: Request, db: Session = Depends(get
     deleted = False
     u_coll = get_collection("user_profiles")
     if u_coll is not None:
-        res = u_coll.delete_many({"$or": [{"username": username}, {"email": username.lower()}]})
+        res = u_coll.delete_many({"$or": [{"username": username}, {"email": username.lower()}, {"_id": username}]})
         if res.deleted_count > 0:
             deleted = True
+
+    c_coll = get_collection("creators")
+    if c_coll is not None:
+        try:
+            c_coll.update_many(
+                {"$or": [{"email": username.lower()}, {"contactEmail": username.lower()}, {"handle": username}]},
+                {"$unset": {"email": "", "contactEmail": "", "password": "", "has_password": ""}}
+            )
+        except Exception:
+            pass
 
     try:
         user = db.query(UserProfile).filter(
