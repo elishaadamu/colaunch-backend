@@ -87,7 +87,7 @@ def generate_concept_card_image(
 
     # Resolve brand accent color
     raw_color = concept.get("brandColor") or concept.get("brand_color") or concept.get("accentColor")
-    accent_rgb = (16, 185, 129)  # Default Electric Emerald
+    accent_rgb = (200, 30, 60)  # Default Crimson Red (#c81e3c)
     if raw_color and isinstance(raw_color, str):
         c_clean = raw_color.strip().lstrip("#")
         if len(c_clean) == 3:
@@ -99,7 +99,7 @@ def generate_concept_card_image(
                 b_c = int(c_clean[4:6], 16)
                 lum = (0.299 * r_c + 0.587 * g_c + 0.114 * b_c) / 255
                 if lum < 0.25:
-                    accent_rgb = (6, 182, 212)  # Ocean Cyan for dark backgrounds
+                    accent_rgb = (200, 30, 60)  # Crimson Red for dark backgrounds
                 else:
                     accent_rgb = (r_c, g_c, b_c)
             except ValueError:

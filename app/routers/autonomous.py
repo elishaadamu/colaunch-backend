@@ -1261,7 +1261,7 @@ def generate_audience_and_concepts(payload: AudienceAndConceptsGenerateSchema):
     followers = payload.followers or "250K"
     bio = payload.bio or ""
     custom_prompt = (payload.custom_prompt or "").strip()
-    brand_color = payload.brand_color or "#10B981"
+    brand_color = payload.brand_color or "#c81e3c"
 
     if payload.creator_id or payload.creator_handle:
         from app.mongodb import get_collection

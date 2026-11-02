@@ -631,8 +631,8 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
         d["metadataInfo"]["diyPassPrice"] = fee_to_use
 
     # 1b. Normalize brand color & theme
-    brand_col = d.get("brandColor") or d.get("brand_color") or (d.get("selectedConcept") or {}).get("brandColor") or "#16A34A"
-    color_thm = d.get("colorTheme") or d.get("color_theme") or (d.get("selectedConcept") or {}).get("colorTheme") or "emerald"
+    brand_col = d.get("brandColor") or d.get("brand_color") or (d.get("selectedConcept") or {}).get("brandColor") or "#c81e3c"
+    color_thm = d.get("colorTheme") or d.get("color_theme") or (d.get("selectedConcept") or {}).get("colorTheme") or "crimson"
     d["brandColor"] = brand_col
     d["brand_color"] = brand_col
     d["colorTheme"] = color_thm
@@ -1240,10 +1240,10 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         "hasCustomFee": has_custom_fee_init,
         "selectedConcept": concept_data,
         "selected_concept": concept_data,
-        "brandColor": body.brandColor or getattr(body, "brand_color", None) or concept_data.get("brandColor") or "#16A34A",
-        "brand_color": body.brandColor or getattr(body, "brand_color", None) or concept_data.get("brandColor") or "#16A34A",
-        "colorTheme": body.colorTheme or getattr(body, "color_theme", None) or concept_data.get("colorTheme") or "emerald",
-        "color_theme": body.colorTheme or getattr(body, "color_theme", None) or concept_data.get("colorTheme") or "emerald",
+        "brandColor": body.brandColor or getattr(body, "brand_color", None) or concept_data.get("brandColor") or "#c81e3c",
+        "brand_color": body.brandColor or getattr(body, "brand_color", None) or concept_data.get("brandColor") or "#c81e3c",
+        "colorTheme": body.colorTheme or getattr(body, "color_theme", None) or concept_data.get("colorTheme") or "crimson",
+        "color_theme": body.colorTheme or getattr(body, "color_theme", None) or concept_data.get("colorTheme") or "crimson",
         "validationPlan": {
             "id": f"plan_{proj_id}",
             "customer": customer_desc,
