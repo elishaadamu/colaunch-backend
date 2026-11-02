@@ -1498,12 +1498,19 @@ def exchange_youtube_token_endpoint(payload: dict):
     code = payload.get("code")
     redirect_uri = payload.get("redirect_uri")
     identifier = payload.get("identifier", "default")
+    client_id = payload.get("client_id")
+    client_secret = payload.get("client_secret")
 
     if not code:
         raise HTTPException(status_code=400, detail="Authorization code is required")
 
     try:
-        token_data = exchange_code_for_tokens(code, redirect_uri=redirect_uri)
+        token_data = exchange_code_for_tokens(
+            code, 
+            redirect_uri=redirect_uri,
+            client_id=client_id,
+            client_secret=client_secret
+        )
         access_token = token_data.get("access_token")
         channel_profile = fetch_channel_profile(access_token)
         connection = save_youtube_connection(identifier, token_data, channel_profile)
@@ -1514,6 +1521,7 @@ def exchange_youtube_token_endpoint(payload: dict):
             "connected_at": connection.get("connected_at")
         }
     except Exception as e:
+        logger.error(f"[YouTube OAuth] Token exchange error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

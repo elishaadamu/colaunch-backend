@@ -70,18 +70,23 @@ def generate_youtube_auth_url(redirect_uri: Optional[str] = None, state: Optiona
     return f"{GOOGLE_AUTH_URL}?{query_str}"
 
 
-def exchange_code_for_tokens(code: str, redirect_uri: Optional[str] = None) -> Dict[str, Any]:
+def exchange_code_for_tokens(
+    code: str, 
+    redirect_uri: Optional[str] = None,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Swaps an authorization code from Google OAuth redirect for an access_token & refresh_token.
     """
-    client_id = get_google_client_id()
-    client_secret = get_google_client_secret()
+    effective_client_id = client_id or get_google_client_id()
+    effective_client_secret = client_secret or get_google_client_secret()
     effective_redirect = get_redirect_uri(redirect_uri)
 
     payload = {
         "code": code,
-        "client_id": client_id,
-        "client_secret": client_secret,
+        "client_id": effective_client_id,
+        "client_secret": effective_client_secret,
         "redirect_uri": effective_redirect,
         "grant_type": "authorization_code",
     }
@@ -148,7 +153,19 @@ def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
 def fetch_channel_profile(access_token: str) -> Dict[str, Any]:
     """
     Fetches the authenticated user's YouTube Channel details (title, handle, thumbnail, stats).
+    Also queries userinfo for user's Google profile.
     """
+    user_info = {}
+    try:
+        user_req = urllib.request.Request(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        with urllib.request.urlopen(user_req, timeout=10) as u_resp:
+            user_info = json.loads(u_resp.read().decode("utf-8"))
+    except Exception as ue:
+        logger.warning(f"[YouTube API] Notice fetching Google userinfo: {ue}")
+
     url = f"{YOUTUBE_API_BASE}/channels?part=snippet,statistics,contentDetails&mine=true"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
 
@@ -157,15 +174,18 @@ def fetch_channel_profile(access_token: str) -> Dict[str, Any]:
             data = json.loads(resp.read().decode("utf-8"))
             items = data.get("items", [])
             if not items:
-                # User has a Google account but hasn't created a YouTube channel yet
+                # User has a Google account but hasn't created a public YouTube channel yet
+                email_handle = f"@{user_info.get('email', '').split('@')[0]}" if user_info.get("email") else "@creator"
                 return {
                     "hasChannel": False,
-                    "title": "Google Account (No YouTube Channel Yet)",
-                    "id": "",
-                    "customUrl": "",
-                    "thumbnail": "",
+                    "title": user_info.get("name") or "Google Account (No YouTube Channel Yet)",
+                    "id": user_info.get("id", ""),
+                    "customUrl": email_handle,
+                    "thumbnail": user_info.get("picture", ""),
                     "subscriberCount": "0",
-                    "videoCount": "0"
+                    "videoCount": "0",
+                    "email": user_info.get("email", ""),
+                    "notice": "This Google account does not have a public YouTube channel created yet."
                 }
 
             item = items[0]
@@ -175,27 +195,33 @@ def fetch_channel_profile(access_token: str) -> Dict[str, Any]:
             thumb_url = (
                 thumbnails.get("high", {}).get("url") or
                 thumbnails.get("medium", {}).get("url") or
-                thumbnails.get("default", {}).get("url") or ""
+                thumbnails.get("default", {}).get("url") or
+                user_info.get("picture", "")
             )
+
+            email_handle = snippet.get("customUrl") or (f"@{user_info.get('email', '').split('@')[0]}" if user_info.get("email") else "@creator")
 
             return {
                 "hasChannel": True,
                 "id": item.get("id", ""),
-                "title": snippet.get("title", ""),
+                "title": snippet.get("title", user_info.get("name", "Connected Channel")),
                 "description": snippet.get("description", ""),
-                "customUrl": snippet.get("customUrl", ""),
+                "customUrl": email_handle,
                 "thumbnail": thumb_url,
-                "subscriberCount": statistics.get("subscriberCount", "0"),
-                "videoCount": statistics.get("videoCount", "0"),
-                "viewCount": statistics.get("viewCount", "0"),
+                "subscriberCount": str(statistics.get("subscriberCount", "0")),
+                "videoCount": str(statistics.get("videoCount", "0")),
+                "viewCount": str(statistics.get("viewCount", "0")),
+                "email": user_info.get("email", ""),
             }
     except Exception as e:
         logger.error(f"[YouTube API] Error fetching channel profile: {e}")
         return {
             "hasChannel": False,
             "error": str(e),
-            "title": "Connected YouTube Account",
-            "id": "",
+            "title": user_info.get("name") or "Connected Google Account",
+            "email": user_info.get("email", ""),
+            "id": user_info.get("id", ""),
+            "thumbnail": user_info.get("picture", "")
         }
 
 
