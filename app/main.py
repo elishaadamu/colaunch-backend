@@ -730,6 +730,19 @@ def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
         "chat_data": user.chat_data
     }
 
+@app.options("/api/auth/login")
+def auth_login_options(request: Request):
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
 @app.post("/api/auth/login")
 def auth_login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     from app.models.creator import UserProfile
