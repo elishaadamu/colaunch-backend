@@ -1475,54 +1475,92 @@ def serve_media_image(filename: str, db: Session = Depends(get_db)):
     return Response(content=db_image.image_bytes, media_type=db_image.content_type)
 
 
-# ── Buffer Proxy Endpoints ──────────────────────────────────────────────────
-@app.get("/api/buffer/status")
-def get_buffer_status():
-    """Returns status of Buffer integration without exposing sensitive token."""
-    from app.services.buffer_service import get_buffer_account, get_buffer_channels, get_buffer_token
-    token = get_buffer_token()
-    if not token:
-        return {"authenticated": False, "channels": [], "email": "", "organizationName": ""}
+# ── YouTube Direct OAuth & Social Publishing Endpoints ─────────────────────
+@app.get("/api/youtube/auth-url")
+def get_youtube_auth_url_endpoint(redirect_uri: Optional[str] = None, state: Optional[str] = None):
+    """Generates the Google OAuth 2.0 authorization URL for connecting a YouTube Channel."""
+    from app.services.youtube_service import generate_youtube_auth_url
     try:
-        acct = get_buffer_account()
-        channels = get_buffer_channels(acct.get("organizationId"))
+        url = generate_youtube_auth_url(redirect_uri=redirect_uri, state=state)
+        return {"status": "success", "authUrl": url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/youtube/exchange-token")
+def exchange_youtube_token_endpoint(payload: dict):
+    """Exchanges Google authorization code for persistent tokens and retrieves channel profile."""
+    from app.services.youtube_service import (
+        exchange_code_for_tokens,
+        fetch_channel_profile,
+        save_youtube_connection
+    )
+    code = payload.get("code")
+    redirect_uri = payload.get("redirect_uri")
+    identifier = payload.get("identifier", "default")
+
+    if not code:
+        raise HTTPException(status_code=400, detail="Authorization code is required")
+
+    try:
+        token_data = exchange_code_for_tokens(code, redirect_uri=redirect_uri)
+        access_token = token_data.get("access_token")
+        channel_profile = fetch_channel_profile(access_token)
+        connection = save_youtube_connection(identifier, token_data, channel_profile)
         return {
-            "authenticated": bool(acct.get("accountId")),
-            "email": acct.get("email") or "",
-            "organizationName": acct.get("organizationName") or "",
-            "channels": channels
+            "status": "success",
+            "connected": True,
+            "channel": connection.get("channel"),
+            "connected_at": connection.get("connected_at")
         }
     except Exception as e:
-        return {"authenticated": False, "channels": [], "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/buffer/posts")
-def create_buffer_post_proxy(payload: dict):
-    """Dispatches a post to Buffer."""
-    from fastapi import HTTPException
-    from app.services.buffer_service import create_buffer_post
-    channel_id = payload.get("channelId")
-    text = payload.get("text", "")
-    mode = payload.get("mode", "addToQueue")
-    scheduling_type = payload.get("schedulingType", "automatic")
-    due_at = payload.get("dueAt")
-    save_to_draft = payload.get("saveToDraft", False)
-    assets = payload.get("assets", [])
+@app.get("/api/youtube/status")
+def get_youtube_status_endpoint(identifier: str = "default"):
+    """Returns the YouTube connection status and channel metadata."""
+    from app.services.youtube_service import get_youtube_connection
+    try:
+        return get_youtube_connection(identifier)
+    except Exception as e:
+        return {"connected": False, "channel": None, "error": str(e)}
 
-    if not channel_id:
-        raise HTTPException(status_code=400, detail="channelId is required")
+
+@app.post("/api/youtube/publish")
+def publish_to_youtube_endpoint(payload: dict):
+    """Directly publishes or schedules a post to the authenticated YouTube channel."""
+    from app.services.youtube_service import publish_youtube_post
+    identifier = payload.get("identifier", "default")
+    title = payload.get("title", "New YouTube Video")
+    description = payload.get("description", "")
+    privacy = payload.get("privacy", "public")
+    tags = payload.get("tags", [])
+    video_url = payload.get("video_url")
+    is_short = payload.get("is_short", False)
 
     try:
-        res = create_buffer_post(
-            channel_id=channel_id,
-            text=text,
-            mode=mode,
-            scheduling_type=scheduling_type,
-            due_at=due_at,
-            save_to_draft=save_to_draft,
-            assets=assets
+        res = publish_youtube_post(
+            identifier=identifier,
+            title=title,
+            description=description,
+            privacy=privacy,
+            tags=tags,
+            video_url=video_url,
+            is_short=is_short
         )
-        return {"status": "success", "post": res}
+        return {"status": "success", "result": res}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/youtube/disconnect")
+def disconnect_youtube_endpoint(identifier: str = "default"):
+    """Disconnects the authenticated YouTube account."""
+    from app.services.youtube_service import disconnect_youtube
+    try:
+        disconnect_youtube(identifier)
+        return {"status": "success", "disconnected": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

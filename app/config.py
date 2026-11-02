@@ -101,6 +101,13 @@ class Settings:
         "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=240&auto=format&fit=crop&q=80"
     )
 
+    # Google & YouTube OAuth 2.0 Credentials
+    GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
+    GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    GOOGLE_PROJECT_ID: str = os.getenv("GOOGLE_PROJECT_ID", "")
+    GOOGLE_REDIRECT_URI: str = os.getenv("GOOGLE_REDIRECT_URI", "https://colaunch-web.vercel.app")
+    YOUTUBE_REDIRECT_URI: str = os.getenv("YOUTUBE_REDIRECT_URI", "https://colaunch-web.vercel.app")
+
     # Integration stubs
     YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")
     INSTAGRAM_ACCESS_TOKEN: str = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
