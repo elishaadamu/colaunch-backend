@@ -72,6 +72,7 @@ class Settings:
     APIFY_TIKTOK_ACTOR: str = os.getenv("APIFY_TIKTOK_ACTOR", "0FXVyOXXEmdGcV88a")
     APIFY_INSTAGRAM_ACTOR: str = os.getenv("APIFY_INSTAGRAM_ACTOR", "dSCLg0C3YEZ83HzYX")
     APIFY_YOUTUBE_ACTOR: str = os.getenv("APIFY_YOUTUBE_ACTOR", "67Q6fmd8iedTVcCwY")
+    APIFY_GOOGLE_SEARCH_ACTOR: str = os.getenv("APIFY_GOOGLE_SEARCH_ACTOR", "563JCPLOqM1kMmbbP")
     ACTIVE_AI_PROVIDER: str = os.getenv("ACTIVE_AI_PROVIDER", "openai")
     AI_MODEL: str = "gpt-4o"
 

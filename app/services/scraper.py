@@ -398,6 +398,32 @@ def apify_scrape_youtube_channels(channels: list, apify_token: str = None, timeo
     return results
 
 
+def apify_google_search(keyword: str, apify_token: str = None, timeout_secs: int = 45) -> list:
+    """
+    Run Apify Google Search Scraper Actor (563JCPLOqM1kMmbbP).
+    Input format:
+    {
+        "keyword": keyword,
+        "include_merged": True,
+        "limit": "all"
+    }
+    """
+    from app.config import settings
+    token = apify_token or settings.APIFY_API_KEY
+    if not token or not keyword:
+        return []
+
+    actor_id = getattr(settings, "APIFY_GOOGLE_SEARCH_ACTOR", "563JCPLOqM1kMmbbP")
+    run_input = {
+        "keyword": str(keyword).strip(),
+        "include_merged": True,
+        "limit": "all"
+    }
+
+    raw_items = _apify_run(actor_id, run_input, token, timeout_secs=timeout_secs)
+    return raw_items if isinstance(raw_items, list) else []
+
+
 def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:
     """Fetch live YouTube channel profile data directly using YouTube's Innertube Search and Browse APIs."""
     import urllib.parse
