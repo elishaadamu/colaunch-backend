@@ -606,7 +606,17 @@ class SignupRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     identifier: str
-    password: str
+    password: Optional[str] = ""
+
+class SendCodeRequest(BaseModel):
+    email: str
+
+class VerifyCodeRequest(BaseModel):
+    email: str
+    code: str
+
+# In-memory storage for active login authentication codes
+_AUTH_CODES: Dict[str, Dict[str, Any]] = {}
 
 class SyncRequest(BaseModel):
     username: str
@@ -721,11 +731,19 @@ def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/auth/login")
-def auth_login(req: LoginRequest, db: Session = Depends(get_db)):
+def auth_login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     from app.models.creator import UserProfile
     from fastapi import HTTPException
     from app.mongodb import get_collection
     import re
+
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
 
     ident = req.identifier.strip()
     ident_lower = ident.lower()
@@ -749,37 +767,267 @@ def auth_login(req: LoginRequest, db: Session = Depends(get_db)):
         (UserProfile.email == ident)
     ).first()
 
+    # Check if password was not set in dashboard for this account
+    has_pwd = bool((m_user and m_user.get("password")) or (user and user.password))
+    user_email = (m_user.get("email") if m_user else None) or (user.email if user else None) or (ident if "@" in ident else "")
+
+    if (m_user or user) and not has_pwd:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "no_password_set",
+                "email": user_email,
+                "message": "No password is set for this account. Please use an authentication code sent to your email to log in."
+            },
+            headers=cors_headers
+        )
+
+    # If user provided email without password or requested code login
+    if not req.password and (m_user or user or "@" in ident):
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "code_required",
+                "email": user_email,
+                "message": "Please authenticate using the email verification code."
+            },
+            headers=cors_headers
+        )
+
     # Verify password against MongoDB user
     if m_user:
         stored_pwd = m_user.get("password")
-        if stored_pwd == req.password:
-            return {
-                "status": "success",
-                "username": m_user.get("username"),
-                "email": m_user.get("email") or "",
-                "creator_data": m_user.get("creator_data"),
-                "calendar_data": m_user.get("calendar_data"),
-                "launch_pack_data": m_user.get("launch_pack_data"),
-                "studio_data": m_user.get("studio_data"),
-                "chat_data": m_user.get("chat_data"),
-                "ai_keys": m_user.get("ai_keys")
-            }
+        if stored_pwd and stored_pwd == req.password:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "success",
+                    "username": m_user.get("username"),
+                    "email": m_user.get("email") or "",
+                    "creator_data": m_user.get("creator_data"),
+                    "calendar_data": m_user.get("calendar_data"),
+                    "launch_pack_data": m_user.get("launch_pack_data"),
+                    "studio_data": m_user.get("studio_data"),
+                    "chat_data": m_user.get("chat_data"),
+                    "ai_keys": m_user.get("ai_keys"),
+                    "has_password": True
+                },
+                headers=cors_headers
+            )
 
     # Verify password against SQLite user
-    if user and user.password == req.password:
-        return {
-            "status": "success",
-            "username": user.username,
-            "email": user.email,
-            "creator_data": user.creator_data,
-            "calendar_data": user.calendar_data,
-            "launch_pack_data": user.launch_pack_data,
-            "studio_data": user.studio_data,
-            "chat_data": user.chat_data,
-            "ai_keys": user.ai_keys
-        }
+    if user and user.password and user.password == req.password:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "username": user.username,
+                "email": user.email,
+                "creator_data": user.creator_data,
+                "calendar_data": user.calendar_data,
+                "launch_pack_data": user.launch_pack_data,
+                "studio_data": user.studio_data,
+                "chat_data": user.chat_data,
+                "ai_keys": user.ai_keys,
+                "has_password": True
+            },
+            headers=cors_headers
+        )
 
-    raise HTTPException(status_code=400, detail="Invalid email/username or password credentials.")
+    return JSONResponse(
+        status_code=400,
+        content={"status": "error", "detail": "Invalid email/username or password credentials."},
+        headers=cors_headers
+    )
+
+
+@app.options("/api/auth/send-code")
+def auth_send_code_options(request: Request):
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
+@app.post("/api/auth/send-code")
+def auth_send_code(req: SendCodeRequest, request: Request, db: Session = Depends(get_db)):
+    """Sends a 6-digit authentication code to the user's email for passwordless sign-in."""
+    from app.integrations.email_provider import email_provider
+    from app.mongodb import get_collection
+    import random
+    import time
+
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
+
+    email = req.email.strip().lower()
+    if not email or "@" not in email:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "A valid email address is required."},
+            headers=cors_headers
+        )
+
+    # Generate 6-digit verification code
+    code = f"{random.randint(100000, 999999)}"
+    _AUTH_CODES[email] = {
+        "code": code,
+        "expires_at": time.time() + 900  # 15 minutes
+    }
+
+    display_name = "Creator"
+    u_coll = get_collection("user_profiles")
+    if u_coll is not None:
+        m_user = u_coll.find_one({"email": email})
+        if m_user:
+            display_name = (m_user.get("creator_data") or {}).get("name") or m_user.get("username") or "Creator"
+
+    subject = f"Your CoLaunch Login Code: {code}"
+    body_html = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0c0f17; color: #ffffff; padding: 40px 20px; max-width: 500px; margin: 0 auto; border: 1px solid #202738; border-radius: 8px;">
+        <div style="text-align: center; margin-bottom: 24px;">
+            <div style="font-size: 18px; font-weight: 800; color: #c81e3c; letter-spacing: -0.5px; margin-bottom: 12px;">COLAUNCH</div>
+            <h2 style="color: #ffffff; font-size: 20px; font-weight: 800; margin: 0 0 8px 0;">Sign In Verification Code</h2>
+            <p style="color: #94a3b8; font-size: 13px; margin: 0;">Use the code below to access your CoLaunch workspace.</p>
+        </div>
+        <div style="background-color: #141926; border: 1px solid #242d42; border-radius: 6px; padding: 22px; text-align: center; margin-bottom: 24px;">
+            <span style="font-family: monospace, Courier, monospace; font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #38bdf8;">{code}</span>
+        </div>
+        <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0 0 8px 0;">This code is valid for 15 minutes.</p>
+        <p style="color: #475569; font-size: 11px; text-align: center; margin: 0;">If you did not request this login code, you can safely ignore this email.</p>
+    </div>
+    """
+    body_text = f"Your CoLaunch Login Code: {code}\n\nUse this code to sign in to your workspace. Valid for 15 minutes."
+
+    try:
+        email_provider.send_email(
+            to_email=email,
+            subject=subject,
+            body_html=body_html,
+            body_text=body_text,
+            display_name="CoLaunch Auth"
+        )
+        logger.info(f"[Auth Code] Code successfully sent to {email}")
+    except Exception as e:
+        logger.warning(f"[Auth Code] Email send warning: {e}")
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "message": f"Authentication code sent to {email}",
+            "email": email
+        },
+        headers=cors_headers
+    )
+
+
+@app.options("/api/auth/verify-code")
+def auth_verify_code_options(request: Request):
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
+@app.post("/api/auth/verify-code")
+def auth_verify_code(req: VerifyCodeRequest, request: Request, db: Session = Depends(get_db)):
+    """Verifies a single-use 6-digit email code and restores workspace state."""
+    import time
+    from app.models.creator import UserProfile
+    from app.mongodb import get_collection
+
+    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
+
+    email = req.email.strip().lower()
+    code = req.code.strip()
+
+    stored = _AUTH_CODES.get(email)
+    if not stored:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "No active verification code found for this email. Please request a new one."},
+            headers=cors_headers
+        )
+
+    if time.time() > stored.get("expires_at", 0):
+        if email in _AUTH_CODES:
+            del _AUTH_CODES[email]
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "Verification code has expired. Please request a fresh code."},
+            headers=cors_headers
+        )
+
+    if stored.get("code") != code:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "Incorrect verification code. Please check your email and try again."},
+            headers=cors_headers
+        )
+
+    # Valid code! Consume it
+    if email in _AUTH_CODES:
+        del _AUTH_CODES[email]
+
+    # Query MongoDB / SQLite for user
+    u_coll = get_collection("user_profiles")
+    m_user = None
+    if u_coll is not None:
+        m_user = u_coll.find_one({"email": email})
+
+    user = db.query(UserProfile).filter(UserProfile.email == email).first()
+
+    username = (m_user.get("username") if m_user else None) or (user.username if user else None) or email.split("@")[0]
+    creator_data = (m_user.get("creator_data") if m_user else None) or (user.creator_data if user else None) or {}
+    calendar_data = (m_user.get("calendar_data") if m_user else None) or (user.calendar_data if user else None)
+    launch_pack_data = (m_user.get("launch_pack_data") if m_user else None) or (user.launch_pack_data if user else None)
+    studio_data = (m_user.get("studio_data") if m_user else None) or (user.studio_data if user else None)
+    chat_data = (m_user.get("chat_data") if m_user else None) or (user.chat_data if user else None)
+    ai_keys = (m_user.get("ai_keys") if m_user else None) or (user.ai_keys if user else None)
+
+    has_password = bool((m_user and m_user.get("password")) or (user and user.password))
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "username": username,
+            "email": email,
+            "creator_data": creator_data,
+            "calendar_data": calendar_data,
+            "launch_pack_data": launch_pack_data,
+            "studio_data": studio_data,
+            "chat_data": chat_data,
+            "ai_keys": ai_keys,
+            "logged_in_via_code": True,
+            "has_password": has_password
+        },
+        headers=cors_headers
+    )
 
 @app.post("/api/auth/sync")
 def auth_sync(req: SyncRequest, db: Session = Depends(get_db)):
