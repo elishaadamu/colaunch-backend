@@ -1078,7 +1078,7 @@ def fetch_creator_channel_comments(handle_or_id: str, platform: str = "youtube",
             return fetch_youtube_video_comments(target, limit=limit)
 
         clean_handle = target.split("youtube.com/")[-1].split("?")[0].strip("/").lstrip("@")
-        videos = fetch_youtube_channel_videos(clean_handle, limit=3)
+        videos = fetch_youtube_channel_videos(clean_handle, limit=10)
 
         # Fallback to Apify channel scraper if videos couldn't be resolved via Innertube
         from app.config import settings
@@ -1089,7 +1089,7 @@ def fetch_creator_channel_comments(handle_or_id: str, platform: str = "youtube",
                 if ch_items and isinstance(ch_items[0], dict):
                     raw_apify = ch_items[0].get("raw_apify_data") or {}
                     ch_vids = raw_apify.get("videos") or raw_apify.get("latestVideos") or []
-                    for v in ch_vids[:3]:
+                    for v in ch_vids[:10]:
                         v_id = v.get("id") or v.get("videoId")
                         if v_id:
                             videos.append({
@@ -1139,12 +1139,11 @@ def fetch_creator_channel_comments(handle_or_id: str, platform: str = "youtube",
         if not all_comments and token:
             try:
                 actor_id = "streamers~youtube-comments-scraper"
-                v_urls = [vid.get("url") or f"https://www.youtube.com/watch?v={vid.get('videoId')}" for vid in videos[:5] if vid.get("videoId") or vid.get("id")]
-                if not v_urls:
-                    v_urls = [f"https://www.youtube.com/@{clean_handle}"]
+                v_urls = [vid.get("url") or f"https://www.youtube.com/watch?v={vid.get('videoId')}" for vid in videos[:10] if vid.get("videoId") or vid.get("id")]
+                v_urls.append(f"https://www.youtube.com/@{clean_handle}/videos")
                 run_input = {
                     "startUrls": [{"url": u} for u in v_urls],
-                    "maxComments": limit,
+                    "maxComments": max(limit * 3, 30),
                     "sortCommentsBy": "TOP_COMMENTS"
                 }
                 apify_items = _apify_run(actor_id, run_input, token, timeout_secs=45)
