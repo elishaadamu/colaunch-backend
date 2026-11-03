@@ -640,104 +640,104 @@ def render_otp_verification_email(
 <body style="margin: 0; padding: 0; background-color: #07090e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
   <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #07090e; min-height: 100vh;">
     <tr>
-      <td align="center" style="padding: 40px 16px;">
+      <td align="center" style="padding: 24px 12px;">
         
-        <!-- Main Card Container (Zero Radius) -->
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 520px; background-color: #0c0f17; border: 1px solid #1e2638; border-radius: 0px;">
+        <!-- Main Card Container (Zero Radius, Compact) -->
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 480px; background-color: #0c0f17; border: 1px solid #1e2638; border-radius: 0px;">
           
           <!-- Top Brand Banner with CoLaunch Rocket Logo -->
           <tr>
-            <td style="padding: 32px 32px 20px 32px; border-bottom: 1px solid #161b2b; text-align: center;">
+            <td style="padding: 22px 24px 14px 24px; border-bottom: 1px solid #161b2b; text-align: center;">
               <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center">
                 <tr>
-                  <td style="vertical-align: middle; padding-right: 12px;">
-                    <div style="width: 38px; height: 38px; background-color: #ffffff; border-radius: 50%; text-align: center; line-height: 38px; font-size: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
+                  <td style="vertical-align: middle; padding-right: 10px;">
+                    <div style="width: 32px; height: 32px; background-color: #ffffff; border-radius: 50%; text-align: center; line-height: 32px; font-size: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
                       🚀
                     </div>
                   </td>
                   <td style="vertical-align: middle;">
-                    <span style="font-family: 'Playfair Display', Georgia, Cambria, 'Times New Roman', serif; font-size: 26px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; line-height: 1;">
+                    <span style="font-family: 'Playfair Display', Georgia, Cambria, 'Times New Roman', serif; font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; line-height: 1;">
                       CoLaunch
                     </span>
                   </td>
                 </tr>
               </table>
-              <div style="margin-top: 14px;">
-                <span style="display: inline-block; font-family: 'SF Mono', Menlo, Consolas, Courier, monospace; font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #f43f5e; background-color: rgba(244, 63, 94, 0.1); border: 1px solid rgba(244, 63, 94, 0.25); padding: 3px 10px; border-radius: 0px;">
+              <div style="margin-top: 10px;">
+                <span style="display: inline-block; font-family: 'SF Mono', Menlo, Consolas, Courier, monospace; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #ffffff !important; background-color: #c81e3c; border: 1px solid #c81e3c; padding: 2px 8px; border-radius: 0px;">
                   AUTHENTICATION SECURITY CODE
                 </span>
               </div>
             </td>
           </tr>
 
-          <!-- Content Body -->
+          <!-- Content Body (Tight & Compact) -->
           <tr>
-            <td class="card-body" style="padding: 32px 32px 28px 32px;">
-              <h2 style="margin: 0 0 12px 0; color: #ffffff; font-size: 20px; font-weight: 800; letter-spacing: -0.3px;">
+            <td class="card-body" style="padding: 22px 24px 18px 24px;">
+              <h2 style="margin: 0 0 8px 0; color: #ffffff; font-size: 18px; font-weight: 800; letter-spacing: -0.3px;">
                 Single-Use Verification Code
               </h2>
-              <p style="margin: 0 0 20px 0; color: #94a3b8; font-size: 14px; line-height: 1.6;">
+              <p style="margin: 0 0 14px 0; color: #94a3b8; font-size: 13px; line-height: 1.5;">
                 Hello <strong style="color: #f1f5f9;">{clean_name}</strong>, use the secure 6-digit code below to authenticate your CoLaunch creator workspace.
               </p>
 
-              <!-- 6-Digit Code Box (Monospace & High Legibility) -->
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 24px 0;">
+              <!-- 6-Digit Code Box (Monospace & High Legibility, Tighter Padding) -->
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 16px 0;">
                 <tr>
-                  <td style="background-color: #111624; border: 2px solid #242f48; padding: 24px 16px; text-align: center; border-radius: 0px;">
-                    <div style="font-family: 'SF Mono', Menlo, Consolas, Courier, monospace; font-size: 38px; font-weight: 800; letter-spacing: 12px; color: #ffffff; text-shadow: 0 0 20px rgba(56, 189, 248, 0.35);" class="code-display">
+                  <td style="background-color: #111624; border: 1px solid #242f48; padding: 16px 12px; text-align: center; border-radius: 0px;">
+                    <div style="font-family: 'SF Mono', Menlo, Consolas, Courier, monospace; font-size: 32px; font-weight: 800; letter-spacing: 10px; color: #ffffff; text-shadow: 0 0 16px rgba(56, 189, 248, 0.35);" class="code-display">
                       {clean_code}
                     </div>
-                    <div style="margin-top: 10px; font-size: 11px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">
+                    <div style="margin-top: 6px; font-size: 10px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">
                       Enter this 6-digit code in the verification prompt
                     </div>
                   </td>
                 </tr>
               </table>
 
-              <!-- Meta / Expiration Details -->
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #080b12; border: 1px solid #161b2b; padding: 14px 16px; margin-bottom: 24px; border-radius: 0px;">
+              <!-- Meta / Expiration Details (Tighter Box) -->
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #080b12; border: 1px solid #161b2b; padding: 10px 12px; margin-bottom: 16px; border-radius: 0px;">
                 <tr>
-                  <td style="vertical-align: top; width: 22px; padding-right: 10px; font-size: 15px;">⏱️</td>
-                  <td style="font-size: 12px; color: #cbd5e1; line-height: 1.5;">
+                  <td style="vertical-align: top; width: 18px; padding-right: 8px; font-size: 13px;">⏱️</td>
+                  <td style="font-size: 11px; color: #cbd5e1; line-height: 1.4;">
                     <strong style="color: #ffffff;">Valid for 15 minutes.</strong> This code expires automatically for your security.
                   </td>
                 </tr>
-                <tr><td colspan="2" style="height: 10px;"></td></tr>
+                <tr><td colspan="2" style="height: 6px;"></td></tr>
                 <tr>
-                  <td style="vertical-align: top; width: 22px; padding-right: 10px; font-size: 15px;">🔒</td>
-                  <td style="font-size: 12px; color: #cbd5e1; line-height: 1.5;">
-                    <strong style="color: #ffffff;">Security Alert:</strong> Never share this code with anyone. CoLaunch engineers and staff will never ask for your code.
+                  <td style="vertical-align: top; width: 18px; padding-right: 8px; font-size: 13px;">🔒</td>
+                  <td style="font-size: 11px; color: #cbd5e1; line-height: 1.4;">
+                    <strong style="color: #ffffff;">Security Alert:</strong> Never share this code. CoLaunch staff will never request your code.
                   </td>
                 </tr>
               </table>
 
-              <!-- Action Link -->
+              <!-- Action Link (Tighter Button, White Color on Dark Red BG) -->
               <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
                 <tr>
                   <td align="center">
-                    <a href="{canonical_base}" target="_blank" style="display: inline-block; background-color: #c81e3c; color: #ffffff; font-weight: 700; font-size: 13px; text-decoration: none; padding: 13px 32px; border-radius: 0px; letter-spacing: 0.2px; text-transform: uppercase;">
+                    <a href="{canonical_base}" target="_blank" style="display: inline-block; background-color: #c81e3c; color: #ffffff !important; font-weight: 700; font-size: 12px; text-decoration: none; padding: 10px 26px; border-radius: 0px; letter-spacing: 0.2px; text-transform: uppercase;">
                       Launch CoLaunch Workspace →
                     </a>
                   </td>
                 </tr>
               </table>
 
-              <p style="margin: 26px 0 0 0; color: #475569; font-size: 12px; line-height: 1.5; text-align: center;">
-                If you did not request this verification code, someone may have mistyped their email address. No action is required — your account remains completely secure.
+              <p style="margin: 18px 0 0 0; color: #475569; font-size: 11px; line-height: 1.4; text-align: center;">
+                If you did not request this verification code, someone may have mistyped their email. No action is required.
               </p>
             </td>
           </tr>
 
           <!-- Footer -->
           <tr>
-            <td style="padding: 24px 32px; border-top: 1px solid #161b2b; text-align: center; background-color: #080b12;">
-              <p style="margin: 0 0 6px 0; color: #64748b; font-size: 12px; font-weight: 600;">
+            <td style="padding: 16px 24px; border-top: 1px solid #161b2b; text-align: center; background-color: #080b12;">
+              <p style="margin: 0 0 4px 0; color: #64748b; font-size: 11px; font-weight: 600;">
                 CoLaunch • Turn your audience into a software business
               </p>
-              <p style="margin: 0; color: #334155; font-size: 11px;">
+              <p style="margin: 0; color: #334155; font-size: 10px;">
                 <a href="{canonical_base}" style="color: #64748b; text-decoration: underline;">{canonical_base.replace('https://', '')}</a> • Dedicated Creator Workspace
               </p>
-              <p style="margin: 10px 0 0 0; color: #1e293b; font-size: 10px;">
+              <p style="margin: 6px 0 0 0; color: #1e293b; font-size: 9px;">
                 © 2026 CoLaunch Technologies Inc. All rights reserved.
               </p>
             </td>
@@ -798,81 +798,81 @@ def render_welcome_signup_email(
 <body style="margin: 0; padding: 0; background-color: #07090e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
   <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #07090e; min-height: 100vh;">
     <tr>
-      <td align="center" style="padding: 40px 16px;">
+      <td align="center" style="padding: 24px 12px;">
         
-        <!-- Main Card Container -->
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 540px; background-color: #0c0f17; border: 1px solid #1e2638; border-radius: 0px;">
+        <!-- Main Card Container (Zero Radius, Compact) -->
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 480px; background-color: #0c0f17; border: 1px solid #1e2638; border-radius: 0px;">
           
           <!-- Top Header -->
           <tr>
-            <td style="padding: 32px 32px 20px 32px; border-bottom: 1px solid #161b2b; text-align: center;">
+            <td style="padding: 22px 24px 14px 24px; border-bottom: 1px solid #161b2b; text-align: center;">
               <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center">
                 <tr>
-                  <td style="vertical-align: middle; padding-right: 12px;">
-                    <div style="width: 38px; height: 38px; background-color: #ffffff; border-radius: 50%; text-align: center; line-height: 38px; font-size: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
+                  <td style="vertical-align: middle; padding-right: 10px;">
+                    <div style="width: 32px; height: 32px; background-color: #ffffff; border-radius: 50%; text-align: center; line-height: 32px; font-size: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
                       🚀
                     </div>
                   </td>
                   <td style="vertical-align: middle;">
-                    <span style="font-family: 'Playfair Display', Georgia, Cambria, 'Times New Roman', serif; font-size: 26px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; line-height: 1;">
+                    <span style="font-family: 'Playfair Display', Georgia, Cambria, 'Times New Roman', serif; font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; line-height: 1;">
                       CoLaunch
                     </span>
                   </td>
                 </tr>
               </table>
-              <div style="margin-top: 14px;">
-                <span style="display: inline-block; font-family: 'SF Mono', Menlo, Consolas, Courier, monospace; font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #10b981; background-color: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.25); padding: 3px 10px; border-radius: 0px;">
+              <div style="margin-top: 10px;">
+                <span style="display: inline-block; font-family: 'SF Mono', Menlo, Consolas, Courier, monospace; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #ffffff !important; background-color: #10b981; border: 1px solid #10b981; padding: 2px 8px; border-radius: 0px;">
                   OPERATOR WORKSPACE READY
                 </span>
               </div>
             </td>
           </tr>
 
-          <!-- Content Body -->
+          <!-- Content Body (Tight & Compact) -->
           <tr>
-            <td class="card-body" style="padding: 32px 32px 28px 32px;">
-              <h2 style="margin: 0 0 12px 0; color: #ffffff; font-size: 22px; font-weight: 800; letter-spacing: -0.4px;">
+            <td class="card-body" style="padding: 22px 24px 18px 24px;">
+              <h2 style="margin: 0 0 8px 0; color: #ffffff; font-size: 18px; font-weight: 800; letter-spacing: -0.3px;">
                 Welcome to CoLaunch, {clean_user}.
               </h2>
-              <p style="margin: 0 0 24px 0; color: #94a3b8; font-size: 14px; line-height: 1.6;">
+              <p style="margin: 0 0 16px 0; color: #94a3b8; font-size: 13px; line-height: 1.5;">
                 Your secure creator console is fully provisioned. Step inside to blueprint, schedule, and orchestrate your autonomous content and product engines.
               </p>
 
-              <!-- Feature Highlights -->
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 24px;">
+              <!-- Feature Highlights (Compact Cards) -->
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 18px;">
                 <tr>
-                  <td style="padding: 14px; background-color: #111624; border: 1px solid #1f2a3f; margin-bottom: 10px; border-radius: 0px;">
-                    <strong style="color: #ffffff; font-size: 13px;">📅 Autonomous Content Calendar</strong>
-                    <p style="margin: 4px 0 0 0; font-size: 12px; color: #94a3b8; line-height: 1.5;">
+                  <td style="padding: 10px 12px; background-color: #111624; border: 1px solid #1f2a3f; border-radius: 0px;">
+                    <strong style="color: #ffffff; font-size: 12px;">📅 Autonomous Content Calendar</strong>
+                    <p style="margin: 2px 0 0 0; font-size: 11px; color: #94a3b8; line-height: 1.4;">
                       Generate 7-day strategically aligned multi-platform content drafts with explicit date/time scheduling.
                     </p>
                   </td>
                 </tr>
-                <tr><td style="height: 10px;"></td></tr>
+                <tr><td style="height: 6px;"></td></tr>
                 <tr>
-                  <td style="padding: 14px; background-color: #111624; border: 1px solid #1f2a3f; margin-bottom: 10px; border-radius: 0px;">
-                    <strong style="color: #ffffff; font-size: 13px;">⚡ AI Video Performance Studio</strong>
-                    <p style="margin: 4px 0 0 0; font-size: 12px; color: #94a3b8; line-height: 1.5;">
+                  <td style="padding: 10px 12px; background-color: #111624; border: 1px solid #1f2a3f; border-radius: 0px;">
+                    <strong style="color: #ffffff; font-size: 12px;">⚡ AI Video Performance Studio</strong>
+                    <p style="margin: 2px 0 0 0; font-size: 11px; color: #94a3b8; line-height: 1.4;">
                       Self-improving AI diagnostics that analyze drop-offs and generate corrective prompts for your next video.
                     </p>
                   </td>
                 </tr>
-                <tr><td style="height: 10px;"></td></tr>
+                <tr><td style="height: 6px;"></td></tr>
                 <tr>
-                  <td style="padding: 14px; background-color: #111624; border: 1px solid #1f2a3f; border-radius: 0px;">
-                    <strong style="color: #ffffff; font-size: 13px;">🔒 Enterprise Privacy &amp; Auth</strong>
-                    <p style="margin: 4px 0 0 0; font-size: 12px; color: #94a3b8; line-height: 1.5;">
+                  <td style="padding: 10px 12px; background-color: #111624; border: 1px solid #1f2a3f; border-radius: 0px;">
+                    <strong style="color: #ffffff; font-size: 12px;">🔒 Enterprise Privacy &amp; Auth</strong>
+                    <p style="margin: 2px 0 0 0; font-size: 11px; color: #94a3b8; line-height: 1.4;">
                       Your social channel tokens, API keys, and audience signals are secured on MongoDB Atlas.
                     </p>
                   </td>
                 </tr>
               </table>
 
-              <!-- Action Button -->
+              <!-- Action Button (Tighter Button, White Color on Dark Red BG) -->
               <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
                 <tr>
                   <td align="center">
-                    <a href="{canonical_base}/dashboard" target="_blank" style="display: inline-block; background-color: #c81e3c; color: #ffffff; font-weight: 700; font-size: 13px; text-decoration: none; padding: 14px 36px; border-radius: 0px; letter-spacing: 0.2px; text-transform: uppercase;">
+                    <a href="{canonical_base}/dashboard" target="_blank" style="display: inline-block; background-color: #c81e3c; color: #ffffff !important; font-weight: 700; font-size: 12px; text-decoration: none; padding: 11px 28px; border-radius: 0px; letter-spacing: 0.2px; text-transform: uppercase;">
                       Launch Your CoLaunch Console →
                     </a>
                   </td>
@@ -883,14 +883,14 @@ def render_welcome_signup_email(
 
           <!-- Footer -->
           <tr>
-            <td style="padding: 24px 32px; border-top: 1px solid #161b2b; text-align: center; background-color: #080b12;">
-              <p style="margin: 0 0 6px 0; color: #64748b; font-size: 12px; font-weight: 600;">
+            <td style="padding: 16px 24px; border-top: 1px solid #161b2b; text-align: center; background-color: #080b12;">
+              <p style="margin: 0 0 4px 0; color: #64748b; font-size: 11px; font-weight: 600;">
                 CoLaunch • Turn your audience into a software business
               </p>
-              <p style="margin: 0; color: #334155; font-size: 11px;">
+              <p style="margin: 0; color: #334155; font-size: 10px;">
                 <a href="{canonical_base}" style="color: #64748b; text-decoration: underline;">{canonical_base.replace('https://', '')}</a> • Dedicated Creator Workspace
               </p>
-              <p style="margin: 10px 0 0 0; color: #1e293b; font-size: 10px;">
+              <p style="margin: 6px 0 0 0; color: #1e293b; font-size: 9px;">
                 © 2026 CoLaunch Technologies Inc. All rights reserved.
               </p>
             </td>
