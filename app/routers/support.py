@@ -74,7 +74,7 @@ def _format_admin_escalation_email(
     if not cid and clean_h:
         cid = f"cr_{clean_h.lower()}"
         
-    base_url = (settings.FRONTEND_URL or "https://colaunch-web.vercel.app").rstrip("/")
+    base_url = (settings.FRONTEND_URL or "https://app.co-launch.app").rstrip("/")
     dashboard_url = f"{base_url}/dashboard/{cid}" if cid else f"{base_url}/dashboard"
     hub_url = f"{base_url}/{clean_h.lower()}/{cid}" if clean_h and cid else dashboard_url
 
@@ -197,7 +197,7 @@ def _format_creator_confirmation_email(
     if not cid and clean_h:
         cid = f"cr_{clean_h.lower()}"
 
-    base_url = (settings.FRONTEND_URL or "https://colaunch-web.vercel.app").rstrip("/")
+    base_url = (settings.FRONTEND_URL or "https://app.co-launch.app").rstrip("/")
     dashboard_url = f"{base_url}/dashboard/{cid}" if cid else f"{base_url}/dashboard"
     hub_url = f"{base_url}/{clean_h.lower()}/{cid}" if clean_h and cid else dashboard_url
 

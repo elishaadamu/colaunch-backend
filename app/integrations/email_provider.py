@@ -271,5 +271,27 @@ class EmailProvider:
     def check_bounce_status(self, email: str) -> bool:
         return False
 
+    def send_email(
+        self,
+        to_email: str,
+        subject: str,
+        body_html: str,
+        body_text: str,
+        from_email: str = None,
+        display_name: str = None,
+        reply_to: str = None,
+        **kwargs
+    ) -> dict:
+        """Alias for send() to provide seamless backwards compatibility."""
+        return self.send(
+            to_email=to_email,
+            subject=subject,
+            body_html=body_html,
+            body_text=body_text,
+            from_email=from_email,
+            from_name=display_name,
+            reply_to=reply_to,
+        )
+
 
 email_provider = EmailProvider()

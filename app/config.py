@@ -86,7 +86,7 @@ class Settings:
     GOOGLE_APP_PASSWORD: str = os.getenv("GOOGLE_APP_PASSWORD", "")
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "creatorforgeweb@gmail.com")
     RECIPIENT_EMAIL: str = os.getenv("RECIPIENT_EMAIL", "adamsfair12@gmail.com")
-    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "https://creator-forge-frontend.vercel.app")
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "https://app.co-launch.app")
     BACKEND_URL: str = os.getenv("BACKEND_URL", "https://creator-forge-backend-jj1y.onrender.com")
 
     # =========================================================================
@@ -105,8 +105,8 @@ class Settings:
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
     GOOGLE_PROJECT_ID: str = os.getenv("GOOGLE_PROJECT_ID", "")
-    GOOGLE_REDIRECT_URI: str = os.getenv("GOOGLE_REDIRECT_URI", "https://colaunch-web.vercel.app")
-    YOUTUBE_REDIRECT_URI: str = os.getenv("YOUTUBE_REDIRECT_URI", "https://colaunch-web.vercel.app")
+    GOOGLE_REDIRECT_URI: str = os.getenv("GOOGLE_REDIRECT_URI", "https://app.co-launch.app")
+    YOUTUBE_REDIRECT_URI: str = os.getenv("YOUTUBE_REDIRECT_URI", "https://app.co-launch.app")
 
     # Integration stubs
     YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")

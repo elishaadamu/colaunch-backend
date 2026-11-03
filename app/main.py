@@ -28,8 +28,13 @@ app = FastAPI(
 # ── Compress JSON and text responses to save up to 80% outbound bandwidth ──
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# ── CORS (allow Vite dev server + Vercel frontend) ───────────────────────────
+# ── CORS (allow app.co-launch.app + Vite dev server + Vercel frontend) ─────
 _cors_origins = [
+    "https://app.co-launch.app",
+    "https://app.co-launch.app/",
+    "http://app.co-launch.app",
+    "https://co-launch.app",
+    "https://co-launch.app/",
     "http://localhost:5173",
     "http://localhost:3000",
     "http://localhost:3001",
@@ -47,12 +52,20 @@ if settings.FRONTEND_URL:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app/?",
+    allow_origin_regex=r"https://((.*\.)?co-launch\.app|(.*\.)?vercel\.app)/?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+def get_cors_origin(request: Optional[Request] = None) -> str:
+    """Helper to return dynamic matched CORS origin or canonical app domain."""
+    if request:
+        orig = request.headers.get("origin")
+        if orig:
+            return orig
+    return settings.FRONTEND_URL or "https://app.co-launch.app"
 
 import asyncio
 import logging
@@ -615,8 +628,63 @@ class VerifyCodeRequest(BaseModel):
     email: str
     code: str
 
-# In-memory storage for active login authentication codes
+# Storage & verification for 6-digit email authentication codes
 _AUTH_CODES: Dict[str, Dict[str, Any]] = {}
+
+def store_auth_code(email: str, code: str, expires_in_seconds: int = 900):
+    import time
+    from datetime import datetime
+    norm_email = email.strip().lower()
+    exp = time.time() + expires_in_seconds
+    _AUTH_CODES[norm_email] = {"code": code, "expires_at": exp}
+    try:
+        from app.mongodb import get_collection
+        vc_coll = get_collection("verification_codes")
+        if vc_coll is not None:
+            vc_coll.update_one(
+                {"email": norm_email},
+                {"$set": {"email": norm_email, "code": code, "expires_at": exp, "updated_at": datetime.utcnow()}},
+                upsert=True
+            )
+    except Exception as e:
+        logger.warning(f"[Auth Code] MongoDB write notice: {e}")
+
+def verify_and_consume_code(email: str, code: str) -> bool:
+    import time
+    norm_email = email.strip().lower()
+    clean_code = str(code).strip()
+    if not norm_email or not clean_code:
+        return False
+
+    # Check in-memory first
+    mem = _AUTH_CODES.get(norm_email)
+    if mem and time.time() <= mem.get("expires_at", 0) and str(mem.get("code")).strip() == clean_code:
+        del _AUTH_CODES[norm_email]
+        try:
+            from app.mongodb import get_collection
+            vc_coll = get_collection("verification_codes")
+            if vc_coll is not None:
+                vc_coll.delete_one({"email": norm_email})
+        except Exception:
+            pass
+        return True
+
+    # Check MongoDB collection
+    try:
+        from app.mongodb import get_collection
+        vc_coll = get_collection("verification_codes")
+        if vc_coll is not None:
+            doc = vc_coll.find_one({"email": norm_email})
+            if doc and time.time() <= doc.get("expires_at", 0) and str(doc.get("code")).strip() == clean_code:
+                vc_coll.delete_one({"email": norm_email})
+                if norm_email in _AUTH_CODES:
+                    del _AUTH_CODES[norm_email]
+                return True
+    except Exception as e:
+        logger.warning(f"[Auth Code] MongoDB lookup notice: {e}")
+
+    return False
+
 
 class SyncRequest(BaseModel):
     username: str
@@ -627,112 +695,85 @@ class SyncRequest(BaseModel):
     chat_data: Optional[Dict[str, Any]] = None
 
 @app.post("/api/auth/signup")
-def auth_signup(req: SignupRequest, db: Session = Depends(get_db)):
-    from app.models.creator import UserProfile
+def auth_signup(req: SignupRequest, request: Request):
+    """Registers or updates a user profile solely in MongoDB Atlas."""
     from fastapi import HTTPException
     from app.mongodb import get_collection
+    from datetime import datetime
 
     u_coll = get_collection("user_profiles")
+    if u_coll is None:
+        raise HTTPException(status_code=500, detail="Database connection unavailable")
+
     norm_email = req.email.strip().lower() if (req.email and req.email.strip()) else None
 
-    # Check unique constraints in MongoDB Atlas & DB
-    if u_coll is not None:
-        if norm_email:
-            m_existing = u_coll.find_one({"email": norm_email, "username": {"$ne": req.username}})
-            if m_existing:
-                raise HTTPException(status_code=400, detail="Email already registered by another account")
-        m_user = u_coll.find_one({"username": req.username})
-        if m_user:
-            # User already exists in MongoDB, update with latest onboarding payload
-            update_fields = {}
-            if norm_email is not None:
-                update_fields["email"] = norm_email
-            if req.password:
-                update_fields["password"] = req.password
-            if req.creator_data:
-                update_fields["creator_data"] = req.creator_data
-            if req.calendar_data:
-                update_fields["calendar_data"] = req.calendar_data
-            if req.launch_pack_data:
-                update_fields["launch_pack_data"] = req.launch_pack_data
-            if req.studio_data:
-                update_fields["studio_data"] = req.studio_data
-            if req.chat_data:
-                update_fields["chat_data"] = req.chat_data
-            if update_fields:
-                u_coll.update_one({"username": req.username}, {"$set": update_fields})
-            return {
-                "status": "success",
-                "username": req.username,
-                "email": norm_email or m_user.get("email") or "",
-                "creator_data": req.creator_data or m_user.get("creator_data"),
-                "calendar_data": req.calendar_data or m_user.get("calendar_data"),
-                "launch_pack_data": req.launch_pack_data or m_user.get("launch_pack_data"),
-                "studio_data": req.studio_data or m_user.get("studio_data"),
-                "chat_data": req.chat_data or m_user.get("chat_data")
-            }
+    # Check unique constraints in MongoDB Atlas
+    if norm_email:
+        m_existing = u_coll.find_one({"email": norm_email, "username": {"$ne": req.username}})
+        if m_existing:
+            raise HTTPException(status_code=400, detail="Email already registered by another account")
 
-    existing = db.query(UserProfile).filter(UserProfile.username == req.username).first()
-    if existing:
-        if norm_email:
-            existing.email = norm_email
+    m_user = u_coll.find_one({"username": req.username})
+    now = datetime.utcnow()
+    if m_user:
+        update_fields = {"updated_at": now}
+        if norm_email is not None:
+            update_fields["email"] = norm_email
         if req.password:
-            existing.password = req.password
+            update_fields["password"] = req.password
+            update_fields["has_password"] = True
         if req.creator_data:
-            existing.creator_data = req.creator_data
-        db.commit()
-        db.refresh(existing)
-        user = existing
-    else:
-        user = UserProfile(
-            username=req.username,
-            email=norm_email or "",
-            password=req.password or "",
-            creator_data=req.creator_data,
-            calendar_data=req.calendar_data,
-            launch_pack_data=req.launch_pack_data,
-            studio_data=req.studio_data,
-            chat_data=req.chat_data
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+            update_fields["creator_data"] = req.creator_data
+        if req.calendar_data:
+            update_fields["calendar_data"] = req.calendar_data
+        if req.launch_pack_data:
+            update_fields["launch_pack_data"] = req.launch_pack_data
+        if req.studio_data:
+            update_fields["studio_data"] = req.studio_data
+        if req.chat_data:
+            update_fields["chat_data"] = req.chat_data
+        u_coll.update_one({"username": req.username}, {"$set": update_fields})
+        return {
+            "status": "success",
+            "username": req.username,
+            "email": norm_email or m_user.get("email") or "",
+            "creator_data": req.creator_data or m_user.get("creator_data"),
+            "calendar_data": req.calendar_data or m_user.get("calendar_data"),
+            "launch_pack_data": req.launch_pack_data or m_user.get("launch_pack_data"),
+            "studio_data": req.studio_data or m_user.get("studio_data"),
+            "chat_data": req.chat_data or m_user.get("chat_data")
+        }
 
-    # Persist directly into MongoDB Atlas user_profiles
-    if u_coll is not None:
-        try:
-            u_coll.replace_one(
-                {"username": req.username},
-                {
-                    "_id": req.username,
-                    "username": req.username,
-                    "email": norm_email or "",
-                    "password": req.password or "",
-                    "creator_data": req.creator_data,
-                    "calendar_data": req.calendar_data,
-                    "launch_pack_data": req.launch_pack_data,
-                    "studio_data": req.studio_data,
-                    "chat_data": req.chat_data
-                },
-                upsert=True
-            )
-        except Exception:
-            pass
+    # Insert new user profile document directly into MongoDB Atlas
+    doc = {
+        "username": req.username,
+        "email": norm_email or "",
+        "password": req.password or "",
+        "has_password": bool(req.password),
+        "creator_data": req.creator_data or {},
+        "calendar_data": req.calendar_data or {},
+        "launch_pack_data": req.launch_pack_data or {},
+        "studio_data": req.studio_data or {},
+        "chat_data": req.chat_data or {},
+        "created_at": now,
+        "updated_at": now
+    }
+    u_coll.insert_one(doc)
 
     return {
         "status": "success",
-        "username": user.username,
-        "email": user.email,
-        "creator_data": user.creator_data,
-        "calendar_data": user.calendar_data,
-        "launch_pack_data": user.launch_pack_data,
-        "studio_data": user.studio_data,
-        "chat_data": user.chat_data
+        "username": req.username,
+        "email": norm_email or "",
+        "creator_data": req.creator_data,
+        "calendar_data": req.calendar_data,
+        "launch_pack_data": req.launch_pack_data,
+        "studio_data": req.studio_data,
+        "chat_data": req.chat_data
     }
 
 @app.options("/api/auth/login")
 def auth_login_options(request: Request):
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     return Response(
         status_code=200,
         headers={
@@ -744,13 +785,12 @@ def auth_login_options(request: Request):
     )
 
 @app.post("/api/auth/login")
-def auth_login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
-    from app.models.creator import UserProfile
+def auth_login(req: LoginRequest, request: Request):
     from fastapi import HTTPException
     from app.mongodb import get_collection
     import re
 
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     cors_headers = {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Credentials": "true",
@@ -761,7 +801,7 @@ def auth_login(req: LoginRequest, request: Request, db: Session = Depends(get_db
     ident = req.identifier.strip()
     ident_lower = ident.lower()
 
-    # Query MongoDB Atlas user_profiles (primary database)
+    # Query MongoDB Atlas user_profiles (exclusive single source of truth)
     u_coll = get_collection("user_profiles")
     m_user = None
     if u_coll is not None:
@@ -773,18 +813,30 @@ def auth_login(req: LoginRequest, request: Request, db: Session = Depends(get_db
             ]
         })
 
-    # Also check SQLite UserProfile
-    user = db.query(UserProfile).filter(
-        (UserProfile.username == ident) | 
-        (UserProfile.email == ident_lower) |
-        (UserProfile.email == ident)
-    ).first()
+    # If not found in user_profiles, check if registered in creators collection
+    if not m_user:
+        c_coll = get_collection("creators")
+        if c_coll is not None:
+            c_doc = c_coll.find_one({
+                "$or": [
+                    {"email": ident_lower},
+                    {"contactEmail": ident_lower},
+                    {"handle": {"$regex": f"^{re.escape(ident)}$", "$options": "i"}}
+                ]
+            })
+            if c_doc:
+                m_user = {
+                    "username": c_doc.get("handle", ident).replace("@", ""),
+                    "email": (c_doc.get("email") or c_doc.get("contactEmail") or "").strip().lower(),
+                    "password": c_doc.get("password") or "",
+                    "creator_data": c_doc,
+                    "has_password": bool(c_doc.get("password"))
+                }
 
-    # Check if password was not set in dashboard for this account
-    has_pwd = bool((m_user and m_user.get("password")) or (user and user.password))
-    user_email = (m_user.get("email") if m_user else None) or (user.email if user else None) or (ident if "@" in ident else "")
+    has_pwd = bool(m_user and m_user.get("password"))
+    user_email = (m_user.get("email") if m_user else None) or (ident if "@" in ident else "")
 
-    if (m_user or user) and not has_pwd:
+    if m_user and not has_pwd:
         return JSONResponse(
             status_code=200,
             content={
@@ -796,7 +848,7 @@ def auth_login(req: LoginRequest, request: Request, db: Session = Depends(get_db
         )
 
     # If user provided email without password or requested code login
-    if not req.password and (m_user or user or "@" in ident):
+    if not req.password and (m_user or "@" in ident):
         return JSONResponse(
             status_code=200,
             content={
@@ -828,25 +880,6 @@ def auth_login(req: LoginRequest, request: Request, db: Session = Depends(get_db
                 headers=cors_headers
             )
 
-    # Verify password against SQLite user
-    if user and user.password and user.password == req.password:
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "success",
-                "username": user.username,
-                "email": user.email,
-                "creator_data": user.creator_data,
-                "calendar_data": user.calendar_data,
-                "launch_pack_data": user.launch_pack_data,
-                "studio_data": user.studio_data,
-                "chat_data": user.chat_data,
-                "ai_keys": user.ai_keys,
-                "has_password": True
-            },
-            headers=cors_headers
-        )
-
     return JSONResponse(
         status_code=400,
         content={"status": "error", "detail": "Invalid email/username or password credentials."},
@@ -856,7 +889,7 @@ def auth_login(req: LoginRequest, request: Request, db: Session = Depends(get_db
 
 @app.options("/api/auth/send-code")
 def auth_send_code_options(request: Request):
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     return Response(
         status_code=200,
         headers={
@@ -869,14 +902,14 @@ def auth_send_code_options(request: Request):
 
 
 @app.post("/api/auth/send-code")
-def auth_send_code(req: SendCodeRequest, request: Request, db: Session = Depends(get_db)):
-    """Sends a 6-digit authentication code to the user's email for passwordless sign-in."""
+def auth_send_code(req: SendCodeRequest, request: Request):
+    """Sends a 6-digit authentication code to the user's email for passwordless sign-in and email verification."""
     from app.integrations.email_provider import email_provider
     from app.mongodb import get_collection
     import random
     import time
 
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     cors_headers = {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Credentials": "true",
@@ -894,10 +927,7 @@ def auth_send_code(req: SendCodeRequest, request: Request, db: Session = Depends
 
     # Generate 6-digit verification code
     code = f"{random.randint(100000, 999999)}"
-    _AUTH_CODES[email] = {
-        "code": code,
-        "expires_at": time.time() + 900  # 15 minutes
-    }
+    store_auth_code(email, code, expires_in_seconds=900)
 
     display_name = "Creator"
     u_coll = get_collection("user_profiles")
@@ -906,22 +936,22 @@ def auth_send_code(req: SendCodeRequest, request: Request, db: Session = Depends
         if m_user:
             display_name = (m_user.get("creator_data") or {}).get("name") or m_user.get("username") or "Creator"
 
-    subject = f"Your CoLaunch Login Code: {code}"
+    subject = f"Your CoLaunch Verification Code: {code}"
     body_html = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0c0f17; color: #ffffff; padding: 40px 20px; max-width: 500px; margin: 0 auto; border: 1px solid #202738; border-radius: 8px;">
         <div style="text-align: center; margin-bottom: 24px;">
             <div style="font-size: 18px; font-weight: 800; color: #c81e3c; letter-spacing: -0.5px; margin-bottom: 12px;">COLAUNCH</div>
-            <h2 style="color: #ffffff; font-size: 20px; font-weight: 800; margin: 0 0 8px 0;">Sign In Verification Code</h2>
-            <p style="color: #94a3b8; font-size: 13px; margin: 0;">Use the code below to access your CoLaunch workspace.</p>
+            <h2 style="color: #ffffff; font-size: 20px; font-weight: 800; margin: 0 0 8px 0;">Authentication Verification Code</h2>
+            <p style="color: #94a3b8; font-size: 13px; margin: 0;">Use the code below to verify your email and access your CoLaunch workspace.</p>
         </div>
         <div style="background-color: #141926; border: 1px solid #242d42; border-radius: 6px; padding: 22px; text-align: center; margin-bottom: 24px;">
             <span style="font-family: monospace, Courier, monospace; font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #38bdf8;">{code}</span>
         </div>
         <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0 0 8px 0;">This code is valid for 15 minutes.</p>
-        <p style="color: #475569; font-size: 11px; text-align: center; margin: 0;">If you did not request this login code, you can safely ignore this email.</p>
+        <p style="color: #475569; font-size: 11px; text-align: center; margin: 0;">If you did not request this code, you can safely ignore this email.</p>
     </div>
     """
-    body_text = f"Your CoLaunch Login Code: {code}\n\nUse this code to sign in to your workspace. Valid for 15 minutes."
+    body_text = f"Your CoLaunch Verification Code: {code}\n\nUse this code to verify your email and access your workspace. Valid for 15 minutes."
 
     try:
         email_provider.send_email(
@@ -948,7 +978,7 @@ def auth_send_code(req: SendCodeRequest, request: Request, db: Session = Depends
 
 @app.options("/api/auth/verify-code")
 def auth_verify_code_options(request: Request):
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     return Response(
         status_code=200,
         headers={
@@ -961,13 +991,12 @@ def auth_verify_code_options(request: Request):
 
 
 @app.post("/api/auth/verify-code")
-def auth_verify_code(req: VerifyCodeRequest, request: Request, db: Session = Depends(get_db)):
-    """Verifies a single-use 6-digit email code and restores workspace state."""
-    import time
-    from app.models.creator import UserProfile
+def auth_verify_code(req: VerifyCodeRequest, request: Request):
+    """Verifies a single-use 6-digit email code and restores workspace state directly from MongoDB Atlas."""
     from app.mongodb import get_collection
+    from datetime import datetime
 
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     cors_headers = {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Credentials": "true",
@@ -978,51 +1007,29 @@ def auth_verify_code(req: VerifyCodeRequest, request: Request, db: Session = Dep
     email = req.email.strip().lower()
     code = req.code.strip()
 
-    stored = _AUTH_CODES.get(email)
-    if not stored:
+    if not verify_and_consume_code(email, code):
         return JSONResponse(
             status_code=400,
-            content={"status": "error", "detail": "No active verification code found for this email. Please request a new one."},
+            content={"status": "error", "detail": "Incorrect or expired verification code. Please request a fresh code and try again."},
             headers=cors_headers
         )
 
-    if time.time() > stored.get("expires_at", 0):
-        if email in _AUTH_CODES:
-            del _AUTH_CODES[email]
-        return JSONResponse(
-            status_code=400,
-            content={"status": "error", "detail": "Verification code has expired. Please request a fresh code."},
-            headers=cors_headers
-        )
-
-    if stored.get("code") != code:
-        return JSONResponse(
-            status_code=400,
-            content={"status": "error", "detail": "Incorrect verification code. Please check your email and try again."},
-            headers=cors_headers
-        )
-
-    # Valid code! Consume it
-    if email in _AUTH_CODES:
-        del _AUTH_CODES[email]
-
-    # Query MongoDB / SQLite for user
+    # Valid code! Query MongoDB Atlas user_profiles
     u_coll = get_collection("user_profiles")
     m_user = None
     if u_coll is not None:
         m_user = u_coll.find_one({"email": email})
+        if m_user:
+            u_coll.update_one({"_id": m_user["_id"]}, {"$set": {"email_verified": True, "verified_at": datetime.utcnow()}})
 
-    user = db.query(UserProfile).filter(UserProfile.email == email).first()
-
-    username = (m_user.get("username") if m_user else None) or (user.username if user else None) or email.split("@")[0]
-    creator_data = (m_user.get("creator_data") if m_user else None) or (user.creator_data if user else None) or {}
-    calendar_data = (m_user.get("calendar_data") if m_user else None) or (user.calendar_data if user else None)
-    launch_pack_data = (m_user.get("launch_pack_data") if m_user else None) or (user.launch_pack_data if user else None)
-    studio_data = (m_user.get("studio_data") if m_user else None) or (user.studio_data if user else None)
-    chat_data = (m_user.get("chat_data") if m_user else None) or (user.chat_data if user else None)
-    ai_keys = (m_user.get("ai_keys") if m_user else None) or (user.ai_keys if user else None)
-
-    has_password = bool((m_user and m_user.get("password")) or (user and user.password))
+    username = (m_user.get("username") if m_user else None) or email.split("@")[0]
+    creator_data = (m_user.get("creator_data") if m_user else None) or {}
+    calendar_data = (m_user.get("calendar_data") if m_user else None)
+    launch_pack_data = (m_user.get("launch_pack_data") if m_user else None)
+    studio_data = (m_user.get("studio_data") if m_user else None)
+    chat_data = (m_user.get("chat_data") if m_user else None)
+    ai_keys = (m_user.get("ai_keys") if m_user else None)
+    has_password = bool(m_user and m_user.get("password"))
 
     return JSONResponse(
         status_code=200,
@@ -1030,6 +1037,7 @@ def auth_verify_code(req: VerifyCodeRequest, request: Request, db: Session = Dep
             "status": "success",
             "username": username,
             "email": email,
+            "email_verified": True,
             "creator_data": creator_data,
             "calendar_data": calendar_data,
             "launch_pack_data": launch_pack_data,
@@ -1043,54 +1051,24 @@ def auth_verify_code(req: VerifyCodeRequest, request: Request, db: Session = Dep
     )
 
 @app.post("/api/auth/sync")
-def auth_sync(req: SyncRequest, db: Session = Depends(get_db)):
-    from app.models.creator import UserProfile
+def auth_sync(req: SyncRequest):
+    """Syncs session state directly to MongoDB Atlas user_profiles."""
     from fastapi import HTTPException
     from app.mongodb import get_collection
 
-    user = db.query(UserProfile).filter(UserProfile.username == req.username).first()
-    if not user:
-        u_coll = get_collection("user_profiles")
-        if u_coll is not None:
-            m_user = u_coll.find_one({"username": req.username})
-            if m_user:
-                user = UserProfile(
-                    username=m_user.get("username"),
-                    email=m_user.get("email"),
-                    password=m_user.get("password")
-                )
-                db.add(user)
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if req.creator_data is not None:
-        user.creator_data = req.creator_data
-    if req.calendar_data is not None:
-        user.calendar_data = req.calendar_data
-    if req.launch_pack_data is not None:
-        user.launch_pack_data = req.launch_pack_data
-    if req.studio_data is not None:
-        user.studio_data = req.studio_data
-    if req.chat_data is not None:
-        user.chat_data = req.chat_data
-
-    db.commit()
-
-    # Sync to MongoDB Atlas user_profiles
     u_coll = get_collection("user_profiles")
-    if u_coll is not None:
-        try:
-            update_fields = {}
-            if req.creator_data is not None: update_fields["creator_data"] = req.creator_data
-            if req.calendar_data is not None: update_fields["calendar_data"] = req.calendar_data
-            if req.launch_pack_data is not None: update_fields["launch_pack_data"] = req.launch_pack_data
-            if req.studio_data is not None: update_fields["studio_data"] = req.studio_data
-            if req.chat_data is not None: update_fields["chat_data"] = req.chat_data
-            if update_fields:
-                u_coll.update_one({"username": req.username}, {"$set": update_fields}, upsert=True)
-        except Exception:
-            pass
+    if u_coll is None:
+        raise HTTPException(status_code=500, detail="Database connection unavailable")
+
+    update_fields = {}
+    if req.creator_data is not None: update_fields["creator_data"] = req.creator_data
+    if req.calendar_data is not None: update_fields["calendar_data"] = req.calendar_data
+    if req.launch_pack_data is not None: update_fields["launch_pack_data"] = req.launch_pack_data
+    if req.studio_data is not None: update_fields["studio_data"] = req.studio_data
+    if req.chat_data is not None: update_fields["chat_data"] = req.chat_data
+
+    if update_fields:
+        u_coll.update_one({"username": req.username}, {"$set": update_fields}, upsert=True)
 
     return {"status": "success"}
 
@@ -1114,7 +1092,8 @@ class SyncChatHistoryRequest(BaseModel):
 def get_chat_messages(handle: str, username: Optional[str] = None, db: Session = Depends(get_db)):
     import time
     from app.mongodb import get_collection
-    from app.models.creator import ChatMessageRecord, UserProfile
+    from app.models.creator import ChatMessageRecord
+    from app.mongodb import get_collection
 
     clean_handle = handle.strip().replace("@", "").lower()
     messages = []
@@ -1180,15 +1159,17 @@ def get_chat_messages(handle: str, username: Optional[str] = None, db: Session =
     except Exception as e:
         print(f"[Chat API] SQLite fetch error: {e}")
 
-    # 3. If messages is still empty, check user profile's chat_data
+    # 3. If messages is still empty, check user profile's chat_data in MongoDB Atlas
     if not messages and username:
         try:
-            user = db.query(UserProfile).filter(UserProfile.username == username).first()
-            if user and user.chat_data:
-                for k, v in user.chat_data.items():
-                    if clean_handle in k and isinstance(v, list):
-                        messages = v
-                        break
+            u_coll = get_collection("user_profiles")
+            if u_coll is not None:
+                m_u = u_coll.find_one({"username": username})
+                if m_u and m_u.get("chat_data"):
+                    for k, v in m_u["chat_data"].items():
+                        if clean_handle in k and isinstance(v, list):
+                            messages = v
+                            break
         except Exception:
             pass
 
@@ -1255,7 +1236,8 @@ def sync_chat_history(req: SyncChatHistoryRequest, db: Session = Depends(get_db)
     import uuid
     from datetime import datetime
     from app.mongodb import get_collection
-    from app.models.creator import ChatMessageRecord, UserProfile
+    from app.models.creator import ChatMessageRecord
+    from app.mongodb import get_collection
 
     clean_handle = req.handle.strip().replace("@", "").lower()
     now_ms = time.time() * 1000
@@ -1289,17 +1271,17 @@ def sync_chat_history(req: SyncChatHistoryRequest, db: Session = Depends(get_db)
         except Exception as e:
             print(f"[Chat API] Bulk sync MongoDB error: {e}")
 
-    # Also update user profile chat_data if username provided
+    # Also update user profile chat_data in MongoDB Atlas if username provided
     if req.username:
         try:
-            user = db.query(UserProfile).filter(UserProfile.username == req.username).first()
-            if user:
-                current_chat = user.chat_data or {}
-                current_chat[f"forge_{clean_handle}_chat_messages"] = req.messages
-                user.chat_data = current_chat
-                db.commit()
+            u_coll = get_collection("user_profiles")
+            if u_coll is not None:
+                u_coll.update_one(
+                    {"username": req.username},
+                    {"$set": {f"chat_data.forge_{clean_handle}_chat_messages": req.messages}}
+                )
         except Exception as e:
-            print(f"[Chat API] UserProfile chat_data sync error: {e}")
+            print(f"[Chat API] MongoDB user profile chat_data sync error: {e}")
 
     return {"status": "success", "count": len(req.messages)}
 
@@ -1314,122 +1296,104 @@ class DeleteAiKeysRequest(BaseModel):
     username: str
 
 @app.post("/api/auth/save-ai-keys")
-def save_ai_keys(req: SaveAiKeysRequest, db: Session = Depends(get_db)):
-    """Save AI API keys to the database (user explicitly consented)."""
-    from app.models.creator import UserProfile
+def save_ai_keys(req: SaveAiKeysRequest):
+    """Save AI API keys directly to MongoDB Atlas user_profiles."""
+    from app.mongodb import get_collection
     from fastapi import HTTPException
 
-    user = db.query(UserProfile).filter(UserProfile.username == req.username).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    u_coll = get_collection("user_profiles")
+    if u_coll is None:
+        raise HTTPException(status_code=500, detail="Database unavailable")
 
-    user.ai_keys = req.ai_keys
-    db.commit()
-    return {"status": "success", "message": "AI keys saved securely."}
+    res = u_coll.update_one({"username": req.username}, {"$set": {"ai_keys": req.ai_keys}})
+    if res.matched_count == 0:
+        # Create minimal profile if not present
+        u_coll.insert_one({"username": req.username, "ai_keys": req.ai_keys})
+
+    return {"status": "success", "message": "AI keys saved securely to MongoDB Atlas."}
 
 @app.post("/api/auth/delete-ai-keys")
-def delete_ai_keys(req: DeleteAiKeysRequest, db: Session = Depends(get_db)):
-    """Remove saved AI keys from database."""
-    from app.models.creator import UserProfile
+def delete_ai_keys(req: DeleteAiKeysRequest):
+    """Remove saved AI keys from MongoDB Atlas."""
+    from app.mongodb import get_collection
     from fastapi import HTTPException
 
-    user = db.query(UserProfile).filter(UserProfile.username == req.username).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    u_coll = get_collection("user_profiles")
+    if u_coll is None:
+        raise HTTPException(status_code=500, detail="Database unavailable")
 
-    user.ai_keys = None
-    db.commit()
-    return {"status": "success", "message": "AI keys removed from database."}
+    u_coll.update_one({"username": req.username}, {"$unset": {"ai_keys": ""}})
+    return {"status": "success", "message": "AI keys removed."}
 
 @app.get("/api/auth/load-ai-keys/{username}")
-def load_ai_keys(username: str, db: Session = Depends(get_db)):
-    """Load saved AI keys for a user (only returns if previously consented)."""
-    from app.models.creator import UserProfile
+def load_ai_keys(username: str):
+    """Load saved AI keys directly from MongoDB Atlas."""
+    from app.mongodb import get_collection
     from fastapi import HTTPException
 
-    user = db.query(UserProfile).filter(UserProfile.username == username).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    u_coll = get_collection("user_profiles")
+    if u_coll is None:
+        raise HTTPException(status_code=500, detail="Database unavailable")
 
-    return {"status": "success", "ai_keys": user.ai_keys}
+    user = u_coll.find_one({"username": username})
+    if not user:
+        return {"status": "success", "ai_keys": None}
+
+    return {"status": "success", "ai_keys": user.get("ai_keys")}
 
 
 @app.get("/api/auth/profile/{username}")
-def get_user_profile(username: str, db: Session = Depends(get_db)):
-    """Retrieve full user profile data for session synchronization."""
-    from app.models.creator import UserProfile
+def get_user_profile(username: str):
+    """Retrieve full user profile data for session synchronization directly from MongoDB Atlas."""
     from app.mongodb import get_collection
+    from fastapi import HTTPException
     from datetime import datetime
 
-    user = db.query(UserProfile).filter(UserProfile.username == username).first()
+    u_coll = get_collection("user_profiles")
+    if u_coll is None:
+        raise HTTPException(status_code=500, detail="Database connection unavailable")
 
-    # Fallback: Query MongoDB Atlas user_profiles
-    if not user:
-        try:
-            u_coll = get_collection("user_profiles")
-            if u_coll is not None:
-                m_user = u_coll.find_one({"$or": [{"username": username}, {"email": username}]})
-                if m_user:
-                    user = UserProfile(
-                        username=m_user.get("username", username),
-                        email=m_user.get("email", f"{username}@gmail.com"),
-                        password=m_user.get("password", ""),
-                        creator_data=m_user.get("creator_data"),
-                        calendar_data=m_user.get("calendar_data"),
-                        launch_pack_data=m_user.get("launch_pack_data"),
-                        studio_data=m_user.get("studio_data"),
-                        ai_keys=m_user.get("ai_keys")
-                    )
-                    db.add(user)
-                    db.commit()
-                    db.refresh(user)
-        except Exception as e:
-            logger.warning(f"[Profile] MongoDB lookup notice: {e}")
+    clean_u = (username or "").strip()
+    m_user = u_coll.find_one({
+        "$or": [
+            {"username": clean_u},
+            {"username": clean_u.lower()},
+            {"email": clean_u.lower()}
+        ]
+    })
 
     # Auto-initialize admin/creatorforgeweb profile if not present
-    if not user:
+    if not m_user:
         admin_email = os.getenv("ADMIN_EMAIL", "creatorforgeweb@gmail.com")
-        clean_u = (username or "").lower().strip()
-        if clean_u in ("creatorforgeweb", "admin") or clean_u == admin_email.split("@")[0].lower() or clean_u == admin_email.lower():
-            try:
-                user = UserProfile(
-                    username="creatorforgeweb",
-                    email=admin_email,
-                    password="",
-                    creator_data={},
-                    calendar_data={},
-                    launch_pack_data={},
-                    studio_data={},
-                    ai_keys={}
-                )
-                db.add(user)
-                db.commit()
-                db.refresh(user)
+        if clean_u.lower() in ("creatorforgeweb", "admin") or clean_u.lower() == admin_email.split("@")[0].lower() or clean_u.lower() == admin_email.lower():
+            doc = {
+                "username": "creatorforgeweb",
+                "email": admin_email,
+                "password": "",
+                "creator_data": {},
+                "calendar_data": {},
+                "launch_pack_data": {},
+                "studio_data": {},
+                "ai_keys": {},
+                "email_verified": True,
+                "created_at": datetime.utcnow()
+            }
+            u_coll.update_one({"username": "creatorforgeweb"}, {"$set": doc}, upsert=True)
+            return {
+                "status": "success",
+                "username": "creatorforgeweb",
+                "email": admin_email,
+                "creator_data": {},
+                "calendar_data": {},
+                "launch_pack_data": {},
+                "studio_data": {},
+                "ai_keys": {}
+            }
 
-                u_coll = get_collection("user_profiles")
-                if u_coll is not None:
-                    u_coll.update_one(
-                        {"username": "creatorforgeweb"},
-                        {"$set": {
-                            "username": "creatorforgeweb",
-                            "email": admin_email,
-                            "creator_data": {},
-                            "calendar_data": {},
-                            "launch_pack_data": {},
-                            "studio_data": {},
-                            "ai_keys": {},
-                            "updated_at": datetime.utcnow().isoformat()
-                        }},
-                        upsert=True
-                    )
-            except Exception as e:
-                logger.warning(f"[Profile] Auto-init notice: {e}")
-
-    if not user:
-        # Return empty profile rather than 404 to allow client to sync
+    if not m_user:
         return {
             "status": "success",
-            "username": username,
+            "username": clean_u,
             "email": "",
             "creator_data": None,
             "calendar_data": None,
@@ -1440,27 +1404,28 @@ def get_user_profile(username: str, db: Session = Depends(get_db)):
 
     return {
         "status": "success",
-        "username": user.username,
-        "email": user.email,
-        "creator_data": user.creator_data,
-        "calendar_data": user.calendar_data,
-        "launch_pack_data": user.launch_pack_data,
-        "studio_data": user.studio_data,
-        "ai_keys": user.ai_keys
+        "username": m_user.get("username", clean_u),
+        "email": m_user.get("email", ""),
+        "email_verified": m_user.get("email_verified", False),
+        "creator_data": m_user.get("creator_data"),
+        "calendar_data": m_user.get("calendar_data"),
+        "launch_pack_data": m_user.get("launch_pack_data"),
+        "studio_data": m_user.get("studio_data"),
+        "ai_keys": m_user.get("ai_keys")
     }
-
 
 
 class UpdateProfileRequest(BaseModel):
     username: str
     email: Optional[str] = None
     password: Optional[str] = None
+    verification_code: Optional[str] = None
     creator_data: Optional[Dict[str, Any]] = None
 
 
 @app.options("/api/auth/update-profile")
 def update_profile_options(request: Request):
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     return Response(
         status_code=200,
         headers={
@@ -1473,9 +1438,11 @@ def update_profile_options(request: Request):
 
 
 @app.post("/api/auth/update-profile")
-def update_profile(req: UpdateProfileRequest, request: Request, db: Session = Depends(get_db)):
-    """Update or register profile email, password, and creator_data on MongoDB Atlas & SQLite."""
-    from app.models.creator import UserProfile
+def update_profile(req: UpdateProfileRequest, request: Request):
+    """
+    Update or register profile email, password, and creator_data strictly in MongoDB Atlas.
+    Requires email verification with an auth code before an email can be added or updated.
+    """
     from fastapi import HTTPException
     from app.integrations.email_provider import email_provider
     from app.mongodb import get_collection
@@ -1483,7 +1450,7 @@ def update_profile(req: UpdateProfileRequest, request: Request, db: Session = De
     import time
     from datetime import datetime
 
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     cors_headers = {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Credentials": "true",
@@ -1492,28 +1459,52 @@ def update_profile(req: UpdateProfileRequest, request: Request, db: Session = De
     }
 
     u_coll = get_collection("user_profiles")
+    if u_coll is None:
+        raise HTTPException(status_code=500, detail="Database connection unavailable")
+
     norm_uname = req.username.strip()
     norm_email = req.email.strip().lower() if (req.email and req.email.strip()) else None
 
-    # Search existing user across MongoDB Atlas by username, email, or handle
-    m_user = None
-    if u_coll is not None:
-        or_clauses = [{"username": norm_uname}, {"email": norm_uname.lower()}]
-        if norm_email:
-            or_clauses.append({"email": norm_email})
-        if req.creator_data and req.creator_data.get("handle"):
-            h = req.creator_data["handle"].replace("@", "").strip()
-            or_clauses.extend([{"username": h}, {"creator_data.handle": req.creator_data["handle"]}])
-        m_user = u_coll.find_one({"$or": or_clauses})
-
-    # Also search SQLite
-    sqlite_filter = (UserProfile.username == norm_uname) | (UserProfile.email == norm_uname.lower())
+    # Search existing user in MongoDB Atlas by username, email, or handle
+    or_clauses = [{"username": norm_uname}, {"email": norm_uname.lower()}]
     if norm_email:
-        sqlite_filter = sqlite_filter | (UserProfile.email == norm_email)
-    user = db.query(UserProfile).filter(sqlite_filter).first()
+        or_clauses.append({"email": norm_email})
+    if req.creator_data and req.creator_data.get("handle"):
+        h = req.creator_data["handle"].replace("@", "").strip()
+        or_clauses.extend([{"username": h}, {"creator_data.handle": req.creator_data["handle"]}])
+    m_user = u_coll.find_one({"$or": or_clauses})
+
+    old_email = ((m_user.get("email") if m_user else "") or "").strip().lower()
+    is_email_provided = bool(norm_email)
+    is_email_new_or_changing = is_email_provided and (norm_email != old_email or not (m_user and m_user.get("email_verified")))
+
+    # ── EMAIL VERIFICATION CODE REQUIREMENT ──
+    # When a user adds or changes an email, it MUST be verified with auth code before being successful!
+    if is_email_new_or_changing:
+        code_input = (req.verification_code or "").strip()
+        if not code_input:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "detail": "Email verification required. Please enter the 6-digit authentication code sent to your email."
+                },
+                headers=cors_headers
+            )
+        if not verify_and_consume_code(norm_email, code_input):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "detail": "Invalid or expired verification code. Please request a new code and try again."
+                },
+                headers=cors_headers
+            )
+
+    now = datetime.utcnow()
 
     # ── CASE 1: USER DOES NOT EXIST YET -> REGISTER CREATOR AS OFFICIAL ACCOUNT ──
-    if not user and not m_user:
+    if not m_user:
         clean_username = norm_uname
         if not clean_username or clean_username in ["creator", "default", "creatorforgeweb"]:
             if req.creator_data and req.creator_data.get("handle"):
@@ -1527,25 +1518,24 @@ def update_profile(req: UpdateProfileRequest, request: Request, db: Session = De
         doc = {
             "username": clean_username,
             "email": norm_email or "",
+            "email_verified": True if is_email_provided else False,
+            "verified_at": now if is_email_provided else None,
             "password": pwd,
             "has_password": bool(pwd),
             "creator_data": req.creator_data or {},
-            "created_at": datetime.utcnow()
+            "created_at": now,
+            "updated_at": now
         }
-        if u_coll is not None:
-            u_coll.insert_one(doc)
+        u_coll.insert_one(doc)
 
-        try:
-            new_u = UserProfile(
-                username=clean_username,
-                email=norm_email or "",
-                password=pwd,
-                creator_data=req.creator_data or {}
+        # Update creators collection in MongoDB Atlas
+        c_coll = get_collection("creators")
+        if c_coll is not None and req.creator_data and req.creator_data.get("handle"):
+            h = req.creator_data["handle"]
+            c_coll.update_many(
+                {"$or": [{"handle": h}, {"handle": h.replace("@", "")}]},
+                {"$set": {"email": norm_email, "contactEmail": norm_email, "email_verified": True}}
             )
-            db.add(new_u)
-            db.commit()
-        except Exception:
-            db.rollback()
 
         return JSONResponse(
             status_code=200,
@@ -1553,6 +1543,7 @@ def update_profile(req: UpdateProfileRequest, request: Request, db: Session = De
                 "status": "success",
                 "username": clean_username,
                 "email": norm_email or "",
+                "email_verified": True if is_email_provided else False,
                 "has_password": bool(pwd),
                 "registered": True
             },
@@ -1560,71 +1551,64 @@ def update_profile(req: UpdateProfileRequest, request: Request, db: Session = De
         )
 
     # ── CASE 2: USER EXISTS -> UPDATE ATTRIBUTES ──
-    target_username = m_user.get("username") if m_user else (user.username if user else norm_uname)
-    mongo_updates = {}
+    target_username = m_user.get("username", norm_uname)
+    mongo_updates = {"updated_at": now}
     new_email = norm_email
-    old_email = ((user.email if user else "") or (m_user.get("email") if m_user else "") or "").strip().lower()
 
     if new_email and new_email != old_email:
         # Verify email conflict
-        if u_coll is not None:
-            conflict = u_coll.find_one({"email": new_email, "username": {"$ne": target_username}})
-            if conflict:
-                raise HTTPException(status_code=400, detail="Email address already registered by another account")
-        existing = db.query(UserProfile).filter(
-            (UserProfile.email == new_email) & (UserProfile.username != target_username)
-        ).first()
-        if existing:
+        conflict = u_coll.find_one({"email": new_email, "username": {"$ne": target_username}})
+        if conflict:
             raise HTTPException(status_code=400, detail="Email address already registered by another account")
 
-        if user:
-            user.email = new_email
         mongo_updates["email"] = new_email
+        mongo_updates["email_verified"] = True
+        mongo_updates["verified_at"] = now
 
-        # Send alert if old email was genuine
+        # Security alert to old address if legitimate
         is_dummy_old_email = (
             not old_email or 
             old_email == "creatorforgeweb@gmail.com" or 
             old_email.endswith("@example.com")
         )
         if not is_dummy_old_email:
-            subject = "CoLaunch - Security Alert: Email Address Changed"
-            body_text = f"Hello {target_username},\n\nThe email address associated with your CoLaunch account has been updated from {old_email} to {new_email}."
-            body_html = f"""
-            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #1f2937; border-radius: 16px; background-color: #0b0b0b; color: #f3f4f6;">
-                <h2 style="color: #06b6d4;">COLAUNCH SECURITY NOTICE</h2>
-                <p>Hello <strong>{target_username}</strong>,</p>
-                <p>Your account login email was updated to <strong>{new_email}</strong>.</p>
-            </div>
-            """
             try:
-                email_provider.send(to_email=old_email, subject=subject, body_html=body_html, body_text=body_text)
+                subject = "CoLaunch - Security Alert: Email Address Changed"
+                body_text = f"Hello {target_username},\n\nThe email address associated with your CoLaunch account was updated from {old_email} to {new_email}."
+                body_html = f"<p>Hello <strong>{target_username}</strong>, your account email was updated to <strong>{new_email}</strong>.</p>"
+                email_provider.send_email(to_email=old_email, subject=subject, body_html=body_html, body_text=body_text)
             except Exception as e:
-                logger.error(f"Failed to send email change notification: {str(e)}")
+                logger.warning(f"Email change notification error: {e}")
+    elif is_email_provided and is_email_new_or_changing:
+        mongo_updates["email_verified"] = True
+        mongo_updates["verified_at"] = now
 
     if req.password and req.password.strip():
         pwd = req.password.strip()
-        if user:
-            user.password = pwd
         mongo_updates["password"] = pwd
         mongo_updates["has_password"] = True
 
     if req.creator_data is not None:
-        if user:
-            user.creator_data = req.creator_data
         mongo_updates["creator_data"] = req.creator_data
 
-    # Commit SQLite
-    if user:
-        try:
-            db.commit()
-            db.refresh(user)
-        except Exception:
-            db.rollback()
+    # Commit strictly to MongoDB Atlas user_profiles
+    u_coll.update_one({"_id": m_user["_id"]}, {"$set": mongo_updates})
 
-    # Commit MongoDB Atlas
-    if u_coll is not None and mongo_updates:
-        u_coll.update_one({"username": target_username}, {"$set": mongo_updates}, upsert=True)
+    # Update creators collection in MongoDB Atlas
+    c_coll = get_collection("creators")
+    if c_coll is not None and (new_email or req.creator_data):
+        h = (req.creator_data or {}).get("handle") or (m_user.get("creator_data") or {}).get("handle")
+        if h:
+            c_set = {}
+            if new_email:
+                c_set["email"] = new_email
+                c_set["contactEmail"] = new_email
+                c_set["email_verified"] = True
+            if c_set:
+                c_coll.update_many(
+                    {"$or": [{"handle": h}, {"handle": h.replace("@", "")}]},
+                    {"$set": c_set}
+                )
 
     return JSONResponse(
         status_code=200,
@@ -1632,7 +1616,8 @@ def update_profile(req: UpdateProfileRequest, request: Request, db: Session = De
             "status": "success",
             "username": target_username,
             "email": new_email or old_email,
-            "has_password": bool((user and user.password) or (m_user and m_user.get("password")) or (req.password and req.password.strip()))
+            "email_verified": True if (new_email or m_user.get("email_verified")) else False,
+            "has_password": bool(m_user.get("password") or (req.password and req.password.strip()))
         },
         headers=cors_headers
     )
@@ -1641,7 +1626,7 @@ def update_profile(req: UpdateProfileRequest, request: Request, db: Session = De
 # ── Admin Control APIs ────────────────────────────────────────────────────────
 @app.options("/api/admin/users")
 def list_admin_users_options(request: Request):
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     return Response(
         status_code=200,
         headers={
@@ -1654,14 +1639,14 @@ def list_admin_users_options(request: Request):
 
 
 @app.get("/api/admin/users")
-def list_admin_users(request: Request, db: Session = Depends(get_db)):
-    """List all registered users from MongoDB Atlas user_profiles and SQLite."""
-    from app.models.creator import UserProfile
+def list_admin_users(request: Request):
+    """List all registered users directly and exclusively from MongoDB Atlas user_profiles."""
     from app.mongodb import get_collection
     import json
     import traceback
+    import re
 
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     cors_headers = {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Credentials": "true",
@@ -1672,11 +1657,10 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
     out = []
     seen = set()
 
-    # 1. Fetch all registered users from MongoDB Atlas user_profiles (primary database)
+    # 1. Fetch all registered users from MongoDB Atlas user_profiles
     u_coll = get_collection("user_profiles")
     if u_coll is not None:
         try:
-            # Query documents safely without cursor-side sort that can fail on mixed BSON types
             docs = list(u_coll.find({}))
             for u in docs:
                 try:
@@ -1684,7 +1668,6 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
                     uname = u.get("username")
                     email = (u.get("email") or "").strip().lower()
 
-                    # Creator data safely parsed if string or dict
                     c_data = u.get("creator_data")
                     if isinstance(c_data, str):
                         try:
@@ -1694,11 +1677,9 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
                     elif not isinstance(c_data, dict):
                         c_data = {}
 
-                    # If email is missing, check creator_data
                     if not email and isinstance(c_data, dict):
                         email = (c_data.get("email") or c_data.get("contactEmail") or "").strip().lower()
 
-                    # Fallbacks for username
                     if not uname or uname in ("default", "creator"):
                         if email and "@" in email:
                             uname = email.split("@")[0]
@@ -1711,12 +1692,15 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
                         else:
                             uname = "creator"
 
-                    key = (uname.lower() if uname else "") or email
+                    # Deduplication key: prefer distinct email, or unique username
+                    key = email or (uname.lower() if uname and uname not in ("default", "creator") else raw_id)
                     if not key or key in seen:
                         continue
                     seen.add(key)
                     if email:
                         seen.add(email)
+                    if uname and uname not in ("default", "creator"):
+                        seen.add(uname.lower())
 
                     has_ai_keys = False
                     ai_keys = u.get("ai_keys")
@@ -1739,6 +1723,7 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
                     out.append({
                         "username": uname,
                         "email": email,
+                        "email_verified": u.get("email_verified", bool(email)),
                         "platform": platform or "creator",
                         "handle": handle or uname,
                         "has_ai_keys": has_ai_keys,
@@ -1746,7 +1731,7 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
                         "created_at": created_str
                     })
                 except Exception as doc_err:
-                    logger.error(f"[Admin Users] Error parsing MongoDB user_profiles document: {doc_err}")
+                    logger.error(f"[Admin Users] Error parsing document: {doc_err}")
         except Exception as e:
             logger.error(f"Error fetching MongoDB Atlas user_profiles: {e}\n{traceback.format_exc()}")
 
@@ -1761,7 +1746,7 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
                         continue
                     c_handle = c.get("handle") or c.get("name") or c_email.split("@")[0]
                     c_uname = re.sub(r"[^a-zA-Z0-9_-]", "", c_handle.replace("@", "")) or c_email.split("@")[0]
-                    key = c_uname.lower() or c_email
+                    key = c_email or c_uname.lower()
                     if key in seen:
                         continue
                     seen.add(key)
@@ -1770,6 +1755,7 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
                     out.append({
                         "username": c_uname,
                         "email": c_email,
+                        "email_verified": c.get("email_verified", True),
                         "platform": c.get("platform") or "youtube",
                         "handle": c_handle.replace("@", "") if isinstance(c_handle, str) else str(c_handle),
                         "has_ai_keys": False,
@@ -1780,37 +1766,6 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
                     pass
         except Exception:
             pass
-
-    # 3. Merge with SQLite users
-    try:
-        users = db.query(UserProfile).order_by(UserProfile.created_at.desc()).all()
-        for u in users:
-            key = (u.username or "").lower() or (u.email or "").lower()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-
-            platform = None
-            handle = None
-            if u.creator_data and isinstance(u.creator_data, dict):
-                platform = u.creator_data.get("platform")
-                handle = u.creator_data.get("handle") or u.creator_data.get("name")
-
-            has_ai_keys = False
-            if u.ai_keys and isinstance(u.ai_keys, dict):
-                has_ai_keys = any(bool(v) for v in u.ai_keys.values())
-
-            out.append({
-                "username": u.username,
-                "email": u.email or "",
-                "platform": platform or "creator",
-                "handle": handle or u.username,
-                "has_ai_keys": has_ai_keys,
-                "has_password": bool(u.password),
-                "created_at": u.created_at.isoformat() if u.created_at else None
-            })
-    except Exception as e:
-        logger.error(f"Error fetching SQLite users: {e}")
 
     # Sort users newest first
     out.sort(key=lambda x: x.get("created_at") or "", reverse=True)
@@ -1824,7 +1779,7 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
 
 @app.options("/api/admin/users/{username}")
 def delete_admin_user_options(username: str, request: Request):
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     return Response(
         status_code=200,
         headers={
@@ -1837,13 +1792,12 @@ def delete_admin_user_options(username: str, request: Request):
 
 
 @app.delete("/api/admin/users/{username}")
-def delete_admin_user(username: str, request: Request, db: Session = Depends(get_db)):
-    """Delete a user profile from MongoDB Atlas and SQLite."""
-    from app.models.creator import UserProfile
+def delete_admin_user(username: str, request: Request):
+    """Delete a user profile from MongoDB Atlas."""
     from app.mongodb import get_collection
     from fastapi import HTTPException
 
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     cors_headers = {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Credentials": "true",
@@ -1867,17 +1821,6 @@ def delete_admin_user(username: str, request: Request, db: Session = Depends(get
             )
         except Exception:
             pass
-
-    try:
-        user = db.query(UserProfile).filter(
-            (UserProfile.username == username) | (UserProfile.email == username.lower())
-        ).first()
-        if user:
-            db.delete(user)
-            db.commit()
-            deleted = True
-    except Exception:
-        db.rollback()
 
     if not deleted:
         raise HTTPException(status_code=404, detail="User not found")
@@ -2052,7 +1995,7 @@ def get_youtube_auth_url_endpoint(redirect_uri: Optional[str] = None, state: Opt
 
 @app.options("/api/youtube/exchange-token")
 def exchange_youtube_token_options(request: Request):
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     return Response(
         status_code=200,
         headers={
@@ -2072,7 +2015,7 @@ def exchange_youtube_token_endpoint(payload: dict, request: Request):
         fetch_channel_profile,
         save_youtube_connection
     )
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     cors_headers = {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Credentials": "true",
@@ -2140,7 +2083,7 @@ def get_youtube_status_endpoint(identifier: str = "default", request: Request = 
 
 @app.options("/api/youtube/publish")
 def publish_youtube_options(request: Request):
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     return Response(
         status_code=200,
         headers={
@@ -2156,7 +2099,7 @@ def publish_youtube_options(request: Request):
 def publish_to_youtube_endpoint(payload: dict, request: Request):
     """Directly publishes or schedules a post to the authenticated YouTube channel."""
     from app.services.youtube_service import publish_youtube_post
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     cors_headers = {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Credentials": "true",
@@ -2206,7 +2149,7 @@ def publish_to_youtube_endpoint(payload: dict, request: Request):
 
 @app.options("/api/youtube/disconnect")
 def disconnect_youtube_options(request: Request):
-    origin = request.headers.get("origin") or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     return Response(
         status_code=200,
         headers={
@@ -2222,7 +2165,7 @@ def disconnect_youtube_options(request: Request):
 def disconnect_youtube_endpoint(identifier: str = "default", request: Request = None):
     """Disconnects the authenticated YouTube account."""
     from app.services.youtube_service import disconnect_youtube
-    origin = (request.headers.get("origin") if request else None) or "https://colaunch-web.vercel.app"
+    origin = get_cors_origin(request)
     cors_headers = {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Credentials": "true",

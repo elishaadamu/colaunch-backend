@@ -56,7 +56,7 @@ def get_google_client_secret() -> str:
 def get_redirect_uri(override_uri: Optional[str] = None) -> str:
     if override_uri:
         return override_uri
-    return os.environ.get("GOOGLE_REDIRECT_URI", getattr(settings, "GOOGLE_REDIRECT_URI", "https://colaunch-web.vercel.app"))
+    return os.environ.get("GOOGLE_REDIRECT_URI", getattr(settings, "GOOGLE_REDIRECT_URI", "https://app.co-launch.app"))
 
 
 def generate_youtube_auth_url(redirect_uri: Optional[str] = None, state: Optional[str] = None) -> str:
