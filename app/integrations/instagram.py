@@ -37,7 +37,9 @@ class InstagramIntegration(BasePlatformIntegration):
         if not self.is_configured():
             raise IntegrationNotConfiguredError("INSTAGRAM_ACCESS_TOKEN not set")
         # Extract from biography field and website field only
-        return {}    async def publish_post(self, access_token: str, business_id: str, caption: str, media_url: str = None) -> str:
+        return {}
+
+    async def publish_post(self, access_token: str, business_id: str, caption: str, media_url: str = None) -> str:
         """
         Publish an image post to Instagram Graph API.
         1. Create media container: POST /{business_id}/media

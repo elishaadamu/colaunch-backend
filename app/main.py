@@ -1507,11 +1507,10 @@ def update_profile(req: UpdateProfileRequest, request: Request, db: Session = De
         m_user = u_coll.find_one({"$or": or_clauses})
 
     # Also search SQLite
-    user = db.query(UserProfile).filter(
-        (UserProfile.username == norm_uname) |
-        (UserProfile.email == norm_uname.lower()) |
-        *([(UserProfile.email == norm_email)] if norm_email else [])
-    ).first()
+    sqlite_filter = (UserProfile.username == norm_uname) | (UserProfile.email == norm_uname.lower())
+    if norm_email:
+        sqlite_filter = sqlite_filter | (UserProfile.email == norm_email)
+    user = db.query(UserProfile).filter(sqlite_filter).first()
 
     # ── CASE 1: USER DOES NOT EXIST YET -> REGISTER CREATOR AS OFFICIAL ACCOUNT ──
     if not user and not m_user:
