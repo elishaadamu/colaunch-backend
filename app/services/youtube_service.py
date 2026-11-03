@@ -238,6 +238,115 @@ def fetch_channel_profile(access_token: str) -> Dict[str, Any]:
         }
 
 
+def fetch_authenticated_channel_videos(access_token: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Fetches real uploaded videos for the authenticated YouTube channel using YouTube Data API v3.
+    """
+    try:
+        url = f"{YOUTUBE_API_BASE}/channels?part=contentDetails,snippet&mine=true"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
+        uploads_id = None
+        channel_title = "Connected Channel"
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            items = data.get("items", [])
+            if items:
+                uploads_id = items[0].get("contentDetails", {}).get("relatedPlaylists", {}).get("uploads")
+                channel_title = items[0].get("snippet", {}).get("title", channel_title)
+
+        if not uploads_id:
+            return []
+
+        p_url = f"{YOUTUBE_API_BASE}/playlistItems?part=snippet,contentDetails&playlistId={uploads_id}&maxResults={limit}"
+        p_req = urllib.request.Request(p_url, headers={"Authorization": f"Bearer {access_token}"})
+        with urllib.request.urlopen(p_req, timeout=12) as p_resp:
+            p_data = json.loads(p_resp.read().decode("utf-8"))
+            p_items = p_data.get("items", [])
+
+        if not p_items:
+            return []
+
+        video_ids = [it.get("contentDetails", {}).get("videoId") for it in p_items if it.get("contentDetails", {}).get("videoId")]
+        stats_map = {}
+        if video_ids:
+            try:
+                s_url = f"{YOUTUBE_API_BASE}/videos?part=statistics,contentDetails&id={','.join(video_ids[:50])}"
+                s_req = urllib.request.Request(s_url, headers={"Authorization": f"Bearer {access_token}"})
+                with urllib.request.urlopen(s_req, timeout=12) as s_resp:
+                    s_data = json.loads(s_resp.read().decode("utf-8"))
+                    for sv in s_data.get("items", []):
+                        stats_map[sv["id"]] = sv.get("statistics", {})
+            except Exception as se:
+                logger.warning(f"[YouTube API] Notice fetching video statistics: {se}")
+
+        videos = []
+        for it in p_items:
+            snip = it.get("snippet", {})
+            vid_id = it.get("contentDetails", {}).get("videoId")
+            if not vid_id:
+                continue
+            v_stats = stats_map.get(vid_id, {})
+            v_views = int(v_stats.get("viewCount", 0))
+            thumb = (
+                snip.get("thumbnails", {}).get("high", {}).get("url") or
+                snip.get("thumbnails", {}).get("medium", {}).get("url") or
+                f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg"
+            )
+            videos.append({
+                "id": vid_id,
+                "videoId": vid_id,
+                "title": snip.get("title", "Video Upload"),
+                "description": snip.get("description", ""),
+                "publishedAt": snip.get("publishedAt", ""),
+                "thumbnail": thumb,
+                "views": f"{v_views:,} views" if v_views > 0 else "Verified upload",
+                "viewsNum": v_views,
+                "likes": v_stats.get("likeCount", "0"),
+                "comments": v_stats.get("commentCount", "0"),
+                "url": f"https://www.youtube.com/watch?v={vid_id}",
+                "channel": "YouTube",
+                "channelTitle": channel_title,
+                "format": "Video"
+            })
+        return videos
+    except Exception as e:
+        logger.error(f"[YouTube API] Error fetching channel videos: {e}")
+        return []
+
+
+def get_connected_channel_videos(identifier: str = "default", limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Retrieves real uploaded videos for the connected YouTube channel.
+    Uses OAuth access token first; falls back to public RSS/Innertube scraper.
+    """
+    clean_id = (identifier or "default").replace("@", "").lower().strip()
+    record = _CONNECTED_CHANNELS.get(clean_id) or _CONNECTED_CHANNELS.get("default")
+    if not record or not record.get("tokens"):
+        conn_res = get_youtube_connection(clean_id)
+        if conn_res.get("connected"):
+            record = _CONNECTED_CHANNELS.get(clean_id) or _CONNECTED_CHANNELS.get("default")
+
+    # 1. Try with OAuth access token
+    if record and record.get("tokens", {}).get("access_token"):
+        vids = fetch_authenticated_channel_videos(record["tokens"]["access_token"], limit=limit)
+        if vids:
+            return vids
+
+    # 2. Fallback to scraping by handle / channel ID
+    channel = (record or {}).get("channel") or {}
+    target = channel.get("customUrl") or channel.get("id") or clean_id
+    if target and target != "default":
+        try:
+            from app.services.scraper import fetch_youtube_channel_videos
+            scraped = fetch_youtube_channel_videos(target, limit=limit)
+            if scraped:
+                return scraped
+        except Exception as se:
+            logger.warning(f"[YouTube Video Fallback] Scraper notice: {se}")
+
+    return []
+
+
 def save_youtube_connection(identifier: str, token_data: dict, channel_profile: dict) -> Dict[str, Any]:
     """
     Stores the OAuth tokens and channel profile for a creator/user.

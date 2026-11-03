@@ -2415,6 +2415,46 @@ def get_youtube_status_endpoint(identifier: str = "default", request: Request = 
         return {"connected": False, "channel": None, "error": str(e)}
 
 
+@app.options("/api/youtube/videos")
+def options_youtube_videos(request: Request):
+    origin = get_cors_origin(request)
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
+@app.get("/api/youtube/videos")
+def get_youtube_videos_endpoint(identifier: str = "default", limit: int = 10, request: Request = None):
+    """Returns real uploaded videos for the connected YouTube channel."""
+    from app.services.youtube_service import get_connected_channel_videos
+    origin = get_cors_origin(request) if request else "*"
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
+    try:
+        videos = get_connected_channel_videos(identifier, limit=limit)
+        return JSONResponse(
+            status_code=200,
+            content={"status": "success", "count": len(videos), "videos": videos},
+            headers=cors_headers
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "videos": [], "detail": str(e)},
+            headers=cors_headers
+        )
+
+
 @app.options("/api/youtube/publish")
 def publish_youtube_options(request: Request):
     origin = get_cors_origin(request)
