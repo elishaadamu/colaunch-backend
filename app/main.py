@@ -575,6 +575,12 @@ class VerifyCodeRequest(BaseModel):
     email: str
     code: str
 
+class GoogleAuthRequest(BaseModel):
+    code: Optional[str] = None
+    access_token: Optional[str] = None
+    credential: Optional[str] = None
+    redirect_uri: Optional[str] = None
+
 # Storage & verification for 6-digit email authentication codes
 _AUTH_CODES: Dict[str, Dict[str, Any]] = {}
 
@@ -990,6 +996,185 @@ def auth_verify_code(req: VerifyCodeRequest, request: Request):
         },
         headers=cors_headers
     )
+
+
+@app.options("/api/auth/google")
+def auth_google_options(request: Request):
+    origin = get_cors_origin(request)
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
+@app.post("/api/auth/google")
+async def auth_google(req: GoogleAuthRequest, request: Request):
+    """Authenticates a user via Google Identity Services or Google OAuth 2.0."""
+    from app.services.youtube_service import get_google_client_id, get_google_client_secret
+    from app.mongodb import get_collection
+    import re
+    import time
+    import httpx
+
+    origin = get_cors_origin(request)
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
+
+    email = None
+    name = None
+    picture = None
+    google_id = None
+
+    # 1. Google Credential (JWT token from Google One Tap or Google Sign-In)
+    if req.credential:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={req.credential}")
+                data = resp.json()
+                if "error" not in data and data.get("email"):
+                    email = data.get("email").strip().lower()
+                    name = data.get("name") or email.split("@")[0]
+                    picture = data.get("picture")
+                    google_id = data.get("sub")
+        except Exception as e:
+            logger.warning(f"[Google Auth] Credential verification failed: {e}")
+
+    # 2. Access Token from token client
+    elif req.access_token:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    "https://www.googleapis.com/oauth2/v3/userinfo",
+                    headers={"Authorization": f"Bearer {req.access_token}"}
+                )
+                data = resp.json()
+                if "error" not in data and data.get("email"):
+                    email = data.get("email").strip().lower()
+                    name = data.get("name") or email.split("@")[0]
+                    picture = data.get("picture")
+                    google_id = data.get("sub")
+        except Exception as e:
+            logger.warning(f"[Google Auth] Userinfo fetch failed: {e}")
+
+    # 3. Authorization Code from redirect or code client
+    elif req.code:
+        try:
+            client_id = get_google_client_id()
+            client_secret = get_google_client_secret()
+            redirect_uri = req.redirect_uri or "postmessage"
+            token_payload = {
+                "code": req.code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code"
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.post("https://oauth2.googleapis.com/token", data=token_payload)
+                token_data = resp.json()
+                acc_token = token_data.get("access_token")
+                if acc_token:
+                    userinfo_resp = await client.get(
+                        "https://www.googleapis.com/oauth2/v3/userinfo",
+                        headers={"Authorization": f"Bearer {acc_token}"}
+                    )
+                    user_info = userinfo_resp.json()
+                    email = (user_info.get("email") or "").strip().lower()
+                    name = user_info.get("name") or email.split("@")[0]
+                    picture = user_info.get("picture")
+                    google_id = user_info.get("sub")
+        except Exception as e:
+            logger.warning(f"[Google Auth] Code exchange failed: {e}")
+
+    if not email:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "Could not authenticate with Google. Please try again."},
+            headers=cors_headers
+        )
+
+    # Lookup user in MongoDB Atlas user_profiles
+    u_coll = get_collection("user_profiles")
+    m_user = None
+    if u_coll is not None:
+        m_user = u_coll.find_one({
+            "$or": [
+                {"email": email},
+                {"google_id": google_id}
+            ]
+        })
+
+    # Fallback to creators collection
+    if not m_user:
+        c_coll = get_collection("creators")
+        if c_coll is not None:
+            c_doc = c_coll.find_one({
+                "$or": [
+                    {"email": email},
+                    {"contactEmail": email}
+                ]
+            })
+            if c_doc:
+                m_user = {
+                    "username": c_doc.get("handle", name).replace("@", ""),
+                    "email": email,
+                    "creator_data": c_doc,
+                    "has_password": bool(c_doc.get("password"))
+                }
+
+    # If new user, create their profile immediately
+    if not m_user:
+        clean_user = re.sub(r"[^a-zA-Z0-9_]", "", (name or email.split("@")[0]).lower()) or "creator"
+        new_profile = {
+            "username": clean_user,
+            "email": email,
+            "google_id": google_id,
+            "name": name,
+            "avatar": picture,
+            "has_password": False,
+            "creator_data": {
+                "name": name,
+                "email": email,
+                "avatar": picture,
+                "handle": f"@{clean_user}",
+                "auth_provider": "google"
+            },
+            "created_at": time.time()
+        }
+        if u_coll is not None:
+            try:
+                u_coll.insert_one(new_profile)
+            except Exception as e:
+                logger.warning(f"Could not persist new Google profile: {e}")
+        m_user = new_profile
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "username": m_user.get("username"),
+            "email": m_user.get("email") or email,
+            "creator_data": m_user.get("creator_data"),
+            "calendar_data": m_user.get("calendar_data"),
+            "launch_pack_data": m_user.get("launch_pack_data"),
+            "studio_data": m_user.get("studio_data"),
+            "chat_data": m_user.get("chat_data"),
+            "ai_keys": m_user.get("ai_keys"),
+            "has_password": bool(m_user.get("has_password")),
+            "logged_in_via_google": True
+        },
+        headers=cors_headers
+    )
+
 
 @app.post("/api/auth/sync")
 def auth_sync(req: SyncRequest):
