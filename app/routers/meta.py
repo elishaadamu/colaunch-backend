@@ -107,3 +107,4 @@ def save_meta_selection(payload: SavePageRequest, db: Session = Depends(get_db))
         "facebook_page_id": payload.page_id,
         "instagram_business_id": payload.instagram_business_id
     }
+

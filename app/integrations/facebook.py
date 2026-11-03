@@ -69,3 +69,4 @@ class FacebookIntegration:
 
 
 facebook = FacebookIntegration()
+
