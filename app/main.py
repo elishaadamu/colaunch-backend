@@ -417,7 +417,7 @@ def send_signup_email(req: SignupEmailRequest, request: Request):
             "recipient": req.email
         }
 
-    # Determine base url (check env first, then dynamic origin, fallback to vercel URL)
+    # Determine base url (check env first, then dynamic origin, fallback to canonical subdomain)
     import os
     base_url = os.getenv("BASE_URL", "").rstrip('/')
     if not base_url:
@@ -426,71 +426,17 @@ def send_signup_email(req: SignupEmailRequest, request: Request):
             from urllib.parse import urlparse
             parsed = urlparse(origin)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
-            if "localhost:8000" in base_url or "127.0.0.1:8000" in base_url:
-                base_url = "https://creator-forge-frontend.vercel.app"
+            if "localhost:8000" in base_url or "127.0.0.1:8000" in base_url or "creator-forge" in base_url:
+                base_url = "https://app.co-launch.app"
         else:
-            base_url = "https://creator-forge-frontend.vercel.app"
+            base_url = "https://app.co-launch.app"
 
-    subject = "Welcome to Creator Forge!"
-    body_text = (
-        f"Welcome to the Forge, {req.username}!\n\n"
-        "Your secure creator sandbox is ready. Launch the console to start blueprinting, scheduling, and generating your next-generation content pipeline.\n\n"
-        "Features:\n"
-        "- Automated Content Calendar: Generate strategically aligned content drafts in one click.\n"
-        "- Monetization Blueprints: Analyze stats and auto-generate pitch decks.\n"
-        "- Privacy-Enforced Sandbox: Your API keys and tokens remain local and secure.\n\n"
-        f"Launch Console: {base_url}/login"
+    from app.services.email_template import render_welcome_signup_email
+    body_html, body_text = render_welcome_signup_email(
+        username=req.username,
+        base_url=base_url
     )
-    body_html = f"""
-    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 32px 24px; border: 1px solid #1f2937; border-radius: 20px; background-color: #050505; color: #f3f4f6; box-shadow: 0 20px 40px rgba(0,0,0,0.8);">
-        <!-- Logo Header -->
-        <div style="text-align: center; margin-bottom: 32px; border-bottom: 1px solid #1f2937; padding-bottom: 24px;">
-            <h1 style="color: #ffffff; font-size: 26px; font-weight: 800; margin: 0; letter-spacing: -0.03em; text-transform: uppercase;">CREATOR FORGE</h1>
-            <p style="color: rgba(255,255,255,0.4); font-size: 12px; margin: 6px 0 0 0; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 600;">Operator Console Active</p>
-        </div>
-
-        <!-- Body -->
-        <div style="line-height: 1.6; font-size: 14px; color: #d1d5db; margin-bottom: 32px;">
-            <p style="font-size: 18px; color: #ffffff; font-weight: 700; margin-top: 0; margin-bottom: 12px; letter-spacing: -0.02em;">Welcome to the Forge, <strong>{req.username}</strong>.</p>
-            <p style="margin-top: 0; margin-bottom: 24px; color: rgba(255,255,255,0.7); font-size: 14px;">
-                Your secure creator sandbox is fully provisioned. Step into your console to start blueprinting, scheduling, and generating your next-generation content pipeline.
-            </p>
-
-            <!-- Feature highlights -->
-            <div style="margin-bottom: 32px;">
-                <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 14px; margin-bottom: 12px;">
-                    <span style="font-size: 16px; margin-right: 6px;">📅</span>
-                    <strong style="color: #ffffff; font-size: 13px;">Automated Content Calendar</strong>
-                    <p style="margin: 4px 0 0 0; font-size: 12px; color: rgba(255,255,255,0.45);">Generate 7-day strategically aligned multi-platform content drafts in one click.</p>
-                </div>
-                <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 14px; margin-bottom: 12px;">
-                    <span style="font-size: 16px; margin-right: 6px;">💡</span>
-                    <strong style="color: #ffffff; font-size: 13px;">Monetization Blueprints</strong>
-                    <p style="margin: 4px 0 0 0; font-size: 12px; color: rgba(255,255,255,0.45);">Analyze channel stats to discover optimal digital products and auto-generate pitch decks.</p>
-                </div>
-                <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 14px; margin-bottom: 12px;">
-                    <span style="font-size: 16px; margin-right: 6px;">🔒</span>
-                    <strong style="color: #ffffff; font-size: 13px;">Privacy-Enforced Sandbox</strong>
-                    <p style="margin: 4px 0 0 0; font-size: 12px; color: rgba(255,255,255,0.45);">Your platform tokens and API credentials remain secure, private, and local to you.</p>
-                </div>
-            </div>
-
-            <!-- Button -->
-            <div style="text-align: center; margin-bottom: 8px;">
-                <a href="{base_url}/login" target="_blank" style="display: inline-block; background-color: #ffffff; color: #000000; font-weight: 700; text-decoration: none; padding: 12px 28px; border-radius: 100px; font-size: 13px;">
-                    Launch Console
-                </a>
-            </div>
-        </div>
-
-        <!-- Footer -->
-        <div style="border-top: 1px solid #1f2937; padding-top: 24px; text-align: center;">
-            <p style="font-size: 11px; color: rgba(255,255,255,0.3); margin: 0; line-height: 1.5;">
-                To protect your digital identity, all platform API credentials are loaded strictly in your browser's active memory. They are never written to database tables or persistent storage.
-            </p>
-        </div>
-    </div>
-    """
+    subject = "Welcome to CoLaunch — Your Creator Software Platform is Ready!"
 
     try:
         res = email_provider.send(
@@ -936,22 +882,16 @@ def auth_send_code(req: SendCodeRequest, request: Request):
         if m_user:
             display_name = (m_user.get("creator_data") or {}).get("name") or m_user.get("username") or "Creator"
 
+    import os
+    base_url = os.getenv("BASE_URL", "https://app.co-launch.app").rstrip('/')
+
+    from app.services.email_template import render_otp_verification_email
+    body_html, body_text = render_otp_verification_email(
+        code=code,
+        display_name=display_name,
+        base_url=base_url
+    )
     subject = f"Your CoLaunch Verification Code: {code}"
-    body_html = f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0c0f17; color: #ffffff; padding: 40px 20px; max-width: 500px; margin: 0 auto; border: 1px solid #202738; border-radius: 8px;">
-        <div style="text-align: center; margin-bottom: 24px;">
-            <div style="font-size: 18px; font-weight: 800; color: #c81e3c; letter-spacing: -0.5px; margin-bottom: 12px;">COLAUNCH</div>
-            <h2 style="color: #ffffff; font-size: 20px; font-weight: 800; margin: 0 0 8px 0;">Authentication Verification Code</h2>
-            <p style="color: #94a3b8; font-size: 13px; margin: 0;">Use the code below to verify your email and access your CoLaunch workspace.</p>
-        </div>
-        <div style="background-color: #141926; border: 1px solid #242d42; border-radius: 6px; padding: 22px; text-align: center; margin-bottom: 24px;">
-            <span style="font-family: monospace, Courier, monospace; font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #38bdf8;">{code}</span>
-        </div>
-        <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0 0 8px 0;">This code is valid for 15 minutes.</p>
-        <p style="color: #475569; font-size: 11px; text-align: center; margin: 0;">If you did not request this code, you can safely ignore this email.</p>
-    </div>
-    """
-    body_text = f"Your CoLaunch Verification Code: {code}\n\nUse this code to verify your email and access your workspace. Valid for 15 minutes."
 
     try:
         email_provider.send_email(
