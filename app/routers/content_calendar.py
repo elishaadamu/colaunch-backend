@@ -94,7 +94,7 @@ def publish_calendar_post(post_id: str, db: Session = Depends(get_db)):
     if not post:
         raise HTTPException(404, "Post suggestion not found")
     
-    # Check if this is an Instagram post and check if user has configured custom credentials
+    # Check if this is an Instagram or Facebook post and check if user has configured custom credentials
     if post.platform.lower() == "instagram":
         from app.models.creator import UserProfile, Creator
         from app.integrations.instagram import instagram as instagram_api
@@ -133,6 +133,45 @@ def publish_calendar_post(post_id: str, db: Session = Depends(get_db)):
                         print(f"Successfully posted to real Instagram! Media ID: {media_id}")
                     except Exception as e:
                         print(f"Warning: Real Instagram posting failed: {e}. Falling back to simulation.")
+
+    elif post.platform.lower() in ("facebook", "fb"):
+        from app.models.creator import UserProfile, Creator
+        from app.integrations.facebook import facebook as facebook_api
+        import asyncio
+
+        creator = db.get(Creator, post.creator_id)
+        if creator:
+            user_profiles = db.query(UserProfile).all()
+            matching_user = None
+            for up in user_profiles:
+                if up.creator_data and isinstance(up.creator_data, dict):
+                    h1 = (up.creator_data.get("handle") or "").strip().lower().lstrip("@")
+                    h2 = creator.handle.strip().lower().lstrip("@")
+                    if h1 == h2:
+                        matching_user = up
+                        break
+            
+            if matching_user:
+                fb_token = matching_user.creator_data.get("facebook_access_token")
+                fb_page_id = matching_user.creator_data.get("facebook_page_id")
+                
+                if fb_token and fb_page_id:
+                    try:
+                        try:
+                            loop = asyncio.get_event_loop()
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                        
+                        message_text = f"{post.hook}\n\n{post.body}"
+                        fb_post_id = loop.run_until_complete(facebook_api.publish_feed_post(
+                            page_id=fb_page_id,
+                            access_token=fb_token,
+                            message=message_text
+                        ))
+                        print(f"Successfully posted to real Facebook! Post ID: {fb_post_id}")
+                    except Exception as e:
+                        print(f"Warning: Real Facebook posting failed: {e}. Falling back to simulation.")
 
     post.status = "posted"
     db.commit()
