@@ -320,15 +320,15 @@ def get_connected_channel_videos(identifier: str = "", limit: int = 10) -> List[
     Uses OAuth access token first; falls back to public RSS/Innertube scraper.
     Never returns videos from another user.
     """
-    clean_id = (identifier or "").replace("@", "").lower().strip()
+    raw_id = (identifier or "").strip().lower()
+    clean_id = raw_id if "@" in raw_id else raw_id.lstrip("@")
     if not clean_id or clean_id == "default":
         return []
 
+    conn_res = get_youtube_connection(clean_id)
     record = _CONNECTED_CHANNELS.get(clean_id)
-    if not record or not record.get("tokens"):
-        conn_res = get_youtube_connection(clean_id)
-        if conn_res.get("connected"):
-            record = _CONNECTED_CHANNELS.get(clean_id)
+    if not record and conn_res.get("connected"):
+        record = _CONNECTED_CHANNELS.get(clean_id)
 
     # 1. Try with OAuth access token
     if record and record.get("tokens", {}).get("access_token"):
@@ -338,7 +338,7 @@ def get_connected_channel_videos(identifier: str = "", limit: int = 10) -> List[
 
     # 2. Fallback to scraping by handle / channel ID
     channel = (record or {}).get("channel") or {}
-    target = channel.get("customUrl") or channel.get("id") or clean_id
+    target = channel.get("customUrl") or channel.get("id") or (clean_id if "@" not in clean_id else "")
     if target and target != "default":
         try:
             from app.services.scraper import fetch_youtube_channel_videos
@@ -356,7 +356,8 @@ def save_youtube_connection(identifier: str, token_data: dict, channel_profile: 
     Stores the OAuth tokens and channel profile for a creator/user.
     Strictly isolated per-user — never leaks across different accounts or writes to 'default'.
     """
-    clean_id = (identifier or "").replace("@", "").lower().strip()
+    raw_id = (identifier or "").strip().lower()
+    clean_id = raw_id if "@" in raw_id else raw_id.lstrip("@")
     if not clean_id or clean_id == "default":
         logger.warning("[YouTube Save] Received unauthenticated or default identifier. Skipping save.")
         return {"connected": False, "channel": channel_profile}
@@ -374,6 +375,10 @@ def save_youtube_connection(identifier: str, token_data: dict, channel_profile: 
         "connected_at": time.time()
     }
     _CONNECTED_CHANNELS[clean_id] = record
+    if channel_profile.get("customUrl"):
+        _CONNECTED_CHANNELS[channel_profile["customUrl"].replace("@", "").lower().strip()] = record
+    if channel_profile.get("id"):
+        _CONNECTED_CHANNELS[channel_profile["id"].lower().strip()] = record
 
     # Save permanently to MongoDB Atlas user_profiles strictly for this specific user
     try:
@@ -397,13 +402,13 @@ def save_youtube_connection(identifier: str, token_data: dict, channel_profile: 
                 "creator_data.subscribers": channel_profile.get("subscriberCount"),
                 "creator_data.video_count": channel_profile.get("videoCount"),
             }
+            search_filter = []
+            if "@" in clean_id:
+                search_filter.append({"email": clean_id})
+            else:
+                search_filter.extend([{"username": clean_id}, {"username": clean_id.lower()}])
             u_coll.update_many(
-                {"$or": [
-                    {"email": clean_id},
-                    {"username": clean_id},
-                    {"creator_data.handle": f"@{clean_id}"},
-                    {"creator_data.handle": clean_id}
-                ]},
+                {"$or": search_filter},
                 {"$set": update_payload}
             )
     except Exception as mongo_err:
@@ -418,7 +423,8 @@ def get_youtube_connection(identifier: str = "") -> Dict[str, Any]:
     If no user identifier is provided or the user has not connected YouTube, returns disconnected.
     Never returns another user's connected YouTube channel.
     """
-    clean_id = (identifier or "").replace("@", "").lower().strip()
+    raw_id = (identifier or "").strip().lower()
+    clean_id = raw_id if "@" in raw_id else raw_id.lstrip("@")
     if not clean_id or clean_id == "default":
         return {
             "connected": False,
@@ -433,18 +439,23 @@ def get_youtube_connection(identifier: str = "") -> Dict[str, Any]:
             from app.mongodb import get_collection
             u_coll = get_collection("user_profiles")
             if u_coll is not None:
+                search_filter = []
+                if "@" in clean_id:
+                    search_filter.append({"email": clean_id})
+                else:
+                    search_filter.extend([{"username": clean_id}, {"username": clean_id.lower()}])
                 doc = u_coll.find_one({
-                    "$or": [
-                        {"email": clean_id},
-                        {"username": clean_id},
-                        {"creator_data.handle": f"@{clean_id}"},
-                        {"creator_data.handle": clean_id}
-                    ],
+                    "$or": search_filter,
                     "youtube_connection.connected": True
                 })
                 if doc and doc.get("youtube_connection"):
                     record = doc["youtube_connection"]
                     _CONNECTED_CHANNELS[clean_id] = record
+                    ch = record.get("channel") or {}
+                    if ch.get("customUrl"):
+                        _CONNECTED_CHANNELS[ch["customUrl"].replace("@", "").lower().strip()] = record
+                    if ch.get("id"):
+                        _CONNECTED_CHANNELS[ch["id"].lower().strip()] = record
         except Exception as mongo_err:
             logger.warning(f"[YouTube Service] Mongo fallback read notice: {mongo_err}")
 
@@ -481,7 +492,8 @@ def disconnect_youtube(identifier: str = "") -> bool:
     """
     Disconnects the YouTube account strictly for the given user.
     """
-    clean_id = (identifier or "").replace("@", "").lower().strip()
+    raw_id = (identifier or "").strip().lower()
+    clean_id = raw_id if "@" in raw_id else raw_id.lstrip("@")
     if clean_id and clean_id in _CONNECTED_CHANNELS:
         del _CONNECTED_CHANNELS[clean_id]
     if "default" in _CONNECTED_CHANNELS:
@@ -491,13 +503,13 @@ def disconnect_youtube(identifier: str = "") -> bool:
         from app.mongodb import get_collection
         u_coll = get_collection("user_profiles")
         if u_coll is not None and clean_id and clean_id != "default":
+            search_filter = []
+            if "@" in clean_id:
+                search_filter.append({"email": clean_id})
+            else:
+                search_filter.extend([{"username": clean_id}, {"username": clean_id.lower()}])
             u_coll.update_many(
-                {"$or": [
-                    {"email": clean_id},
-                    {"username": clean_id},
-                    {"creator_data.handle": f"@{clean_id}"},
-                    {"creator_data.handle": clean_id}
-                ]},
+                {"$or": search_filter},
                 {
                     "$set": {
                         "youtube_connection": None,
@@ -510,15 +522,6 @@ def disconnect_youtube(identifier: str = "") -> bool:
             )
     except Exception as e:
         logger.warning(f"[YouTube Disconnect] MongoDB notice: {e}")
-    return True
-    """
-    Disconnects the YouTube account.
-    """
-    clean_id = (identifier or "default").replace("@", "").lower().strip()
-    if clean_id in _CONNECTED_CHANNELS:
-        del _CONNECTED_CHANNELS[clean_id]
-    if "default" in _CONNECTED_CHANNELS:
-        del _CONNECTED_CHANNELS["default"]
     return True
 
 

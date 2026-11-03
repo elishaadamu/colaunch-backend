@@ -161,9 +161,10 @@ def save_meta_selection(payload: SavePageRequest, db: Session = Depends(get_db))
                 update_data["accounts_platforms.instagram.handle"] = payload.instagram_username or "@instagram"
 
             match_query = []
-            if clean_e: match_query.append({"email": clean_e})
-            if clean_u: match_query.extend([{"username": clean_u}, {"email": clean_u}])
-            if clean_h: match_query.extend([{"creator_data.handle": f"@{clean_h}"}, {"creator_data.handle": clean_h}])
+            if clean_e:
+                match_query.append({"email": clean_e})
+            elif clean_u and clean_u not in ("default", "creator", "creatorforgeweb"):
+                match_query.extend([{"username": clean_u}, {"username": clean_u.lower()}])
 
             if match_query:
                 u_coll.update_many(
@@ -192,23 +193,16 @@ def get_meta_connection(
         from app.mongodb import get_collection
         u_coll = get_collection("user_profiles")
         if u_coll is not None:
-            clean_e = (email or "").replace("@", "").lower().strip()
-            clean_u = (username or "").replace("@", "").lower().strip()
-            clean_h = (handle or "").replace("@", "").lower().strip()
-            if clean_h == "default": clean_h = ""
+            clean_e = (email or "").strip().lower()
+            clean_u = (username or "").strip().lower()
+            if clean_u in ("default", "creator", "creatorforgeweb"):
+                clean_u = ""
 
             query = []
             if clean_e:
                 query.append({"email": clean_e})
-            if clean_u:
-                query.extend([{"username": clean_u}, {"email": clean_u}])
-            if clean_h:
-                query.extend([
-                    {"username": clean_h},
-                    {"email": clean_h},
-                    {"creator_data.handle": f"@{clean_h}"},
-                    {"creator_data.handle": clean_h}
-                ])
+            elif clean_u:
+                query.extend([{"username": clean_u}, {"username": clean_u.lower()}])
 
             if not query:
                 return {"success": False, "connection": None}
@@ -229,13 +223,14 @@ def disconnect_meta(payload: DisconnectMetaRequest, db: Session = Depends(get_db
     """Disconnect Meta / Facebook / Instagram strictly for the specified user."""
     clean_e = (payload.email or "").strip().lower()
     clean_u = (payload.username or "").strip().lower()
-    clean_h = (payload.handle or "").strip().lower().lstrip("@")
-    if clean_h == "default": clean_h = ""
+    if clean_u in ("default", "creator", "creatorforgeweb"):
+        clean_u = ""
 
     match_query = []
-    if clean_e: match_query.append({"email": clean_e})
-    if clean_u: match_query.extend([{"username": clean_u}, {"email": clean_u}])
-    if clean_h: match_query.extend([{"creator_data.handle": f"@{clean_h}"}, {"creator_data.handle": clean_h}])
+    if clean_e:
+        match_query.append({"email": clean_e})
+    elif clean_u:
+        match_query.extend([{"username": clean_u}, {"username": clean_u.lower()}])
 
     if not match_query:
         return {"success": True, "disconnected": True}

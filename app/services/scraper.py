@@ -497,7 +497,12 @@ def apify_google_search(keyword: str, apify_token: str = None, timeout_secs: int
 def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:
     """Fetch live YouTube channel profile data directly using YouTube's Innertube Search and Browse APIs."""
     import urllib.parse
-    clean = handle_or_query.lstrip("@").strip()
+    raw = handle_or_query.strip()
+    if "youtube.com/" in raw:
+        m = re.search(r"youtube\.com/(?:channel/|c/|user/|@)?([^/?&\s]+)", raw)
+        clean = m.group(1).lstrip("@").strip() if m else raw.lstrip("@").strip()
+    else:
+        clean = raw.lstrip("@").strip()
     if clean.startswith("channel/"):
         clean = clean.split("channel/")[1].strip()
     channel_id = clean if clean.startswith("UC") and len(clean) == 24 else None

@@ -1799,14 +1799,13 @@ def update_profile(req: UpdateProfileRequest, request: Request):
     norm_uname = req.username.strip()
     norm_email = req.email.strip().lower() if (req.email and req.email.strip()) else None
 
-    # Search existing user in MongoDB Atlas by username, email, or handle
-    or_clauses = [{"username": norm_uname}, {"email": norm_uname.lower()}]
+    # Search existing user in MongoDB Atlas strictly by verified email or unique username
+    or_clauses = []
     if norm_email:
         or_clauses.append({"email": norm_email})
-    if req.creator_data and req.creator_data.get("handle"):
-        h = req.creator_data["handle"].replace("@", "").strip()
-        or_clauses.extend([{"username": h}, {"creator_data.handle": req.creator_data["handle"]}])
-    m_user = u_coll.find_one({"$or": or_clauses})
+    if norm_uname and norm_uname not in ["creator", "default", "creatorforgeweb", ""]:
+        or_clauses.extend([{"username": norm_uname}, {"username": norm_uname.lower()}])
+    m_user = u_coll.find_one({"$or": or_clauses}) if or_clauses else None
 
     old_email = ((m_user.get("email") if m_user else "") or "").strip().lower()
     is_email_provided = bool(norm_email)
