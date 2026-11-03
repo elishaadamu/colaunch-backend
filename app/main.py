@@ -2359,7 +2359,7 @@ def exchange_youtube_token_endpoint(payload: dict, request: Request):
 
     code = payload.get("code")
     redirect_uri = payload.get("redirect_uri")
-    identifier = payload.get("identifier", "default")
+    identifier = payload.get("identifier") or payload.get("email") or payload.get("username") or ""
     client_id = payload.get("client_id")
     client_secret = payload.get("client_secret")
 
@@ -2405,11 +2405,19 @@ def exchange_youtube_token_endpoint(payload: dict, request: Request):
 
 
 @app.get("/api/youtube/status")
-def get_youtube_status_endpoint(identifier: str = "default", request: Request = None):
-    """Returns the YouTube connection status and channel metadata."""
+def get_youtube_status_endpoint(
+    identifier: Optional[str] = None,
+    email: Optional[str] = None,
+    username: Optional[str] = None,
+    request: Request = None
+):
+    """Returns the YouTube connection status strictly for the requested user."""
     from app.services.youtube_service import get_youtube_connection
+    target_id = (email or username or identifier or "").strip()
+    if not target_id or target_id == "default":
+        return {"connected": False, "channel": None}
     try:
-        conn = get_youtube_connection(identifier)
+        conn = get_youtube_connection(target_id)
         return conn
     except Exception as e:
         return {"connected": False, "channel": None, "error": str(e)}
@@ -2430,8 +2438,14 @@ def options_youtube_videos(request: Request):
 
 
 @app.get("/api/youtube/videos")
-def get_youtube_videos_endpoint(identifier: str = "default", limit: int = 10, request: Request = None):
-    """Returns real uploaded videos for the connected YouTube channel."""
+def get_youtube_videos_endpoint(
+    identifier: Optional[str] = None,
+    email: Optional[str] = None,
+    username: Optional[str] = None,
+    limit: int = 10,
+    request: Request = None
+):
+    """Returns real uploaded videos strictly for the connected YouTube channel of this user."""
     from app.services.youtube_service import get_connected_channel_videos
     origin = get_cors_origin(request) if request else "*"
     cors_headers = {
@@ -2440,8 +2454,15 @@ def get_youtube_videos_endpoint(identifier: str = "default", limit: int = 10, re
         "Access-Control-Allow-Methods": "*",
         "Access-Control-Allow-Headers": "*",
     }
+    target_id = (email or username or identifier or "").strip()
+    if not target_id or target_id == "default":
+        return JSONResponse(
+            status_code=200,
+            content={"status": "success", "videos": [], "count": 0},
+            headers=cors_headers
+        )
     try:
-        videos = get_connected_channel_videos(identifier, limit=limit)
+        videos = get_connected_channel_videos(target_id, limit=limit)
         return JSONResponse(
             status_code=200,
             content={"status": "success", "count": len(videos), "videos": videos},
@@ -2536,8 +2557,13 @@ def disconnect_youtube_options(request: Request):
 
 
 @app.delete("/api/youtube/disconnect")
-def disconnect_youtube_endpoint(identifier: str = "default", request: Request = None):
-    """Disconnects the authenticated YouTube account."""
+def disconnect_youtube_endpoint(
+    identifier: Optional[str] = None,
+    email: Optional[str] = None,
+    username: Optional[str] = None,
+    request: Request = None
+):
+    """Disconnects the authenticated YouTube account strictly for this user."""
     from app.services.youtube_service import disconnect_youtube
     origin = get_cors_origin(request)
     cors_headers = {
@@ -2546,8 +2572,10 @@ def disconnect_youtube_endpoint(identifier: str = "default", request: Request = 
         "Access-Control-Allow-Methods": "*",
         "Access-Control-Allow-Headers": "*",
     }
+    target_id = (email or username or identifier or "").strip()
     try:
-        disconnect_youtube(identifier)
+        if target_id and target_id != "default":
+            disconnect_youtube(target_id)
         return JSONResponse(
             status_code=200,
             content={"status": "success", "disconnected": True},

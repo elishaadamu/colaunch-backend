@@ -22,12 +22,20 @@ class VerifyTokenRequest(BaseModel):
 class SavePageRequest(BaseModel):
     handle: Optional[str] = None
     username: Optional[str] = None
+    email: Optional[str] = None
     page_id: str
     page_name: str
     page_access_token: str
     user_access_token: Optional[str] = None
     instagram_business_id: Optional[str] = None
     instagram_username: Optional[str] = None
+
+
+class DisconnectMetaRequest(BaseModel):
+    handle: Optional[str] = None
+    username: Optional[str] = None
+    email: Optional[str] = None
+    channel_type: Optional[str] = "all"
 
 
 @router.post("/verify")
@@ -67,42 +75,52 @@ async def verify_meta_token(payload: VerifyTokenRequest):
 
 @router.post("/save-selection")
 def save_meta_selection(payload: SavePageRequest, db: Session = Depends(get_db)):
+    clean_e = (payload.email or "").strip().lower()
+    clean_u = (payload.username or "").strip().lower()
+    clean_h = (payload.handle or "").strip().lower().lstrip("@")
+    if clean_h == "default": clean_h = ""
+
     profiles = db.query(UserProfile).all()
     target_user = None
-    if payload.handle:
-        clean_handle = payload.handle.strip().lower().lstrip("@")
-        for u in profiles:
-            if u.creator_data and isinstance(u.creator_data, dict):
-                h = (u.creator_data.get("handle") or "").strip().lower().lstrip("@")
-                if h == clean_handle:
-                    target_user = u
-                    break
-    if not target_user and profiles:
-        target_user = profiles[0]
 
-    if not target_user:
-        return {"success": False, "detail": "No profile found to update"}
+    for u in profiles:
+        u_email = (getattr(u, "email", None) or "").strip().lower()
+        u_name = (getattr(u, "username", None) or "").strip().lower()
+        u_handle = ""
+        if u.creator_data and isinstance(u.creator_data, dict):
+            u_handle = (u.creator_data.get("handle") or "").strip().lower().lstrip("@")
 
-    creator_data = dict(target_user.creator_data or {})
-    creator_data["facebook_connected"] = True
-    creator_data["facebook_page_id"] = payload.page_id
-    creator_data["facebook_page_name"] = payload.page_name
-    creator_data["facebook_access_token"] = payload.page_access_token
-    if payload.user_access_token:
-        creator_data["meta_user_token"] = payload.user_access_token
+        if clean_e and u_email == clean_e:
+            target_user = u
+            break
+        if clean_u and u_name == clean_u:
+            target_user = u
+            break
+        if clean_h and u_handle == clean_h:
+            target_user = u
+            break
 
-    if payload.instagram_business_id:
-        creator_data["instagram_connected"] = True
-        creator_data["instagram_business_id"] = payload.instagram_business_id
-        creator_data["instagram_access_token"] = payload.page_access_token
-        if payload.instagram_username:
-            creator_data["instagram_handle"] = payload.instagram_username
+    if target_user:
+        creator_data = dict(target_user.creator_data or {})
+        creator_data["facebook_connected"] = True
+        creator_data["facebook_page_id"] = payload.page_id
+        creator_data["facebook_page_name"] = payload.page_name
+        creator_data["facebook_access_token"] = payload.page_access_token
+        if payload.user_access_token:
+            creator_data["meta_user_token"] = payload.user_access_token
 
-    target_user.creator_data = creator_data
-    db.add(target_user)
-    db.commit()
+        if payload.instagram_business_id:
+            creator_data["instagram_connected"] = True
+            creator_data["instagram_business_id"] = payload.instagram_business_id
+            creator_data["instagram_access_token"] = payload.page_access_token
+            if payload.instagram_username:
+                creator_data["instagram_handle"] = payload.instagram_username
 
-    # Also persist permanently to MongoDB Atlas user_profiles
+        target_user.creator_data = creator_data
+        db.add(target_user)
+        db.commit()
+
+    # Persist permanently to MongoDB Atlas user_profiles strictly for this specific user
     try:
         from app.mongodb import get_collection
         u_coll = get_collection("user_profiles")
@@ -123,8 +141,6 @@ def save_meta_selection(payload: SavePageRequest, db: Session = Depends(get_db))
                     "accessToken": payload.page_access_token
                 }
 
-            clean_h = (payload.handle or "default").replace("@", "").lower().strip()
-            clean_u = (payload.username or "").replace("@", "").lower().strip()
             update_data = {
                 "meta_connection": meta_conn_doc,
                 "creator_data.facebook_connected": True,
@@ -144,26 +160,16 @@ def save_meta_selection(payload: SavePageRequest, db: Session = Depends(get_db))
                 update_data["accounts_platforms.instagram.businessId"] = payload.instagram_business_id
                 update_data["accounts_platforms.instagram.handle"] = payload.instagram_username or "@instagram"
 
-            match_query = [
-                {"creator_data.handle": f"@{clean_h}"},
-                {"creator_data.handle": clean_h},
-                {"username": clean_h},
-                {"email": clean_h}
-            ]
-            if clean_u:
-                match_query.extend([
-                    {"username": clean_u},
-                    {"email": clean_u}
-                ])
+            match_query = []
+            if clean_e: match_query.append({"email": clean_e})
+            if clean_u: match_query.extend([{"username": clean_u}, {"email": clean_u}])
+            if clean_h: match_query.extend([{"creator_data.handle": f"@{clean_h}"}, {"creator_data.handle": clean_h}])
 
-            res = u_coll.update_many(
-                {"$or": match_query},
-                {"$set": update_data}
-            )
-            if res.matched_count == 0:
-                recent = u_coll.find_one(sort=[("_id", -1)])
-                if recent:
-                    u_coll.update_one({"_id": recent["_id"]}, {"$set": update_data})
+            if match_query:
+                u_coll.update_many(
+                    {"$or": match_query},
+                    {"$set": update_data}
+                )
     except Exception as mongo_err:
         print(f"[Meta] MongoDB save warning: {mongo_err}")
 
@@ -176,34 +182,102 @@ def save_meta_selection(payload: SavePageRequest, db: Session = Depends(get_db))
 
 
 @router.get("/connection")
-def get_meta_connection(handle: Optional[str] = "default", username: Optional[str] = None):
-    """Retrieve saved Meta / Facebook connection from MongoDB Atlas."""
+def get_meta_connection(
+    handle: Optional[str] = None,
+    username: Optional[str] = None,
+    email: Optional[str] = None
+):
+    """Retrieve saved Meta / Facebook connection strictly for the requested user."""
     try:
         from app.mongodb import get_collection
         u_coll = get_collection("user_profiles")
         if u_coll is not None:
-            clean_h = (handle or "default").replace("@", "").lower().strip()
+            clean_e = (email or "").replace("@", "").lower().strip()
             clean_u = (username or "").replace("@", "").lower().strip()
+            clean_h = (handle or "").replace("@", "").lower().strip()
+            if clean_h == "default": clean_h = ""
+
             query = []
+            if clean_e:
+                query.append({"email": clean_e})
             if clean_u:
                 query.extend([{"username": clean_u}, {"email": clean_u}])
-            if clean_h and clean_h != "default":
+            if clean_h:
                 query.extend([
                     {"username": clean_h},
                     {"email": clean_h},
                     {"creator_data.handle": f"@{clean_h}"},
                     {"creator_data.handle": clean_h}
                 ])
-            doc = None
-            if query:
-                doc = u_coll.find_one({"$or": query, "meta_connection.facebook.connected": True})
-                if not doc:
-                    doc = u_coll.find_one({"$or": query})
+
+            if not query:
+                return {"success": False, "connection": None}
+
+            doc = u_coll.find_one({"$or": query, "meta_connection.facebook.connected": True})
             if not doc:
-                doc = u_coll.find_one({"meta_connection.facebook.connected": True}, sort=[("_id", -1)])
+                doc = u_coll.find_one({"$or": query})
+
             if doc and doc.get("meta_connection"):
                 return {"success": True, "connection": doc["meta_connection"]}
     except Exception as e:
         print(f"[Meta] Connection lookup warning: {e}")
     return {"success": False, "connection": None}
+
+
+@router.post("/disconnect")
+def disconnect_meta(payload: DisconnectMetaRequest, db: Session = Depends(get_db)):
+    """Disconnect Meta / Facebook / Instagram strictly for the specified user."""
+    clean_e = (payload.email or "").strip().lower()
+    clean_u = (payload.username or "").strip().lower()
+    clean_h = (payload.handle or "").strip().lower().lstrip("@")
+    if clean_h == "default": clean_h = ""
+
+    match_query = []
+    if clean_e: match_query.append({"email": clean_e})
+    if clean_u: match_query.extend([{"username": clean_u}, {"email": clean_u}])
+    if clean_h: match_query.extend([{"creator_data.handle": f"@{clean_h}"}, {"creator_data.handle": clean_h}])
+
+    if not match_query:
+        return {"success": True, "disconnected": True}
+
+    channel_type = payload.channel_type or "all"
+    try:
+        from app.mongodb import get_collection
+        u_coll = get_collection("user_profiles")
+        if u_coll is not None:
+            if channel_type == "facebook":
+                unset_fields = {
+                    "meta_connection.facebook": "",
+                    "creator_data.facebook_connected": False,
+                    "creator_data.facebook_page_id": None,
+                    "creator_data.facebook_page_name": None,
+                    "creator_data.facebook_access_token": None,
+                    "accounts_platforms.facebook.connected": False
+                }
+            elif channel_type == "instagram":
+                unset_fields = {
+                    "meta_connection.instagram": "",
+                    "creator_data.instagram_connected": False,
+                    "creator_data.instagram_business_id": None,
+                    "creator_data.instagram_access_token": None,
+                    "accounts_platforms.instagram.connected": False
+                }
+            else:
+                unset_fields = {
+                    "meta_connection": None,
+                    "creator_data.facebook_connected": False,
+                    "creator_data.facebook_page_id": None,
+                    "creator_data.facebook_page_name": None,
+                    "creator_data.facebook_access_token": None,
+                    "creator_data.instagram_connected": False,
+                    "creator_data.instagram_business_id": None,
+                    "creator_data.instagram_access_token": None,
+                    "accounts_platforms.facebook.connected": False,
+                    "accounts_platforms.instagram.connected": False
+                }
+            u_coll.update_many({"$or": match_query}, {"$set": unset_fields})
+    except Exception as e:
+        print(f"[Meta Disconnect] Warning: {e}")
+
+    return {"success": True, "disconnected": True}
 
