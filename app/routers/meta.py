@@ -6,7 +6,7 @@ and saving credentials to creator profile.
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from sqlmodel import Session
+from sqlalchemy.orm import Session
 import httpx
 
 from app.database import get_db
