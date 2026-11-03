@@ -577,14 +577,20 @@ def innertube_fetch_channel(handle_or_query: str, deep: bool = False) -> dict:
                 matched_ch = None
                 clean_lower = clean.lower()
                 for ch in candidate_channels:
-                    c_handle = (ch.get("subscriberCountText", {}).get("simpleText") or "").lower().replace("@", "")
-                    c_title = (ch.get("title", {}).get("simpleText") or "").lower()
-                    c_canon = (ch.get("canonicalBaseUrl") or "").lower().replace("@", "").strip("/")
-                    if clean_lower in (c_handle, c_canon) or c_title == clean_lower:
+                    c_title = (ch.get("title", {}).get("simpleText") or "".join(r.get("text", "") for r in ch.get("title", {}).get("runs", []))).lower()
+                    c_canon = (ch.get("canonicalBaseUrl") or ch.get("navigationEndpoint", {}).get("browseEndpoint", {}).get("canonicalBaseUrl") or "").lower().replace("@", "").strip("/")
+                    c_byline = "".join(r.get("text", "") for r in ch.get("shortBylineText", {}).get("runs", [])).lower().replace("@", "").strip()
+                    if clean_lower in (c_canon, c_byline) or c_title == clean_lower or clean_lower.replace(" ", "") == c_title.replace(" ", ""):
                         matched_ch = ch
                         break
 
-                selected_ch = matched_ch or (candidate_channels[0] if candidate_channels else None)
+                selected_ch = matched_ch
+                if not selected_ch and candidate_channels:
+                    first_canon = (candidate_channels[0].get("canonicalBaseUrl") or "").lower().replace("@", "").strip("/")
+                    first_title = (candidate_channels[0].get("title", {}).get("simpleText") or "").lower()
+                    if clean_lower in first_canon or clean_lower in first_title or first_title in clean_lower:
+                        selected_ch = candidate_channels[0]
+
                 if selected_ch:
                     channel_id = selected_ch.get("channelId")
                     canonical = selected_ch.get("canonicalBaseUrl", "").lstrip("/").lstrip("@")
