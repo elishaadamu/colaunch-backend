@@ -1300,8 +1300,6 @@ def get_dashboard_data(username: Optional[str] = None, handle: Optional[str] = N
     m_user = None
     if query:
         m_user = u_coll.find_one({"$or": query})
-    if not m_user:
-        m_user = u_coll.find_one(sort=[("_id", -1)])
 
     if not m_user:
         return {

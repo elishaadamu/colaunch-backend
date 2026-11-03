@@ -1381,8 +1381,8 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
                 {"slug": clean_target},
                 {"slug": {"$regex": f"^{clean_target}$", "$options": "i"}},
             ]})
-            if not doc:
-                # Fallback to latest active project in collection
+            if not doc and clean_target == "default":
+                # Only fallback if explicitly requesting default demo
                 doc = coll.find_one(sort=[("updatedAt", -1), ("createdAt", -1), ("_id", -1)])
             if doc:
                 ws_coll = get_collection("workflow_states")
@@ -1425,10 +1425,7 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
                 {"slug": {"$regex": f"^{clean_target}$", "$options": "i"}},
             ]})
             if not doc:
-                # Fallback to latest active project or create one
-                doc = coll.find_one(sort=[("updatedAt", -1), ("createdAt", -1), ("_id", -1)])
-            if not doc:
-                doc = {"_id": project_id, "id": project_id, "createdAt": datetime.utcnow().isoformat(), **body}
+                doc = {"_id": project_id, "id": project_id, "creator_id": project_id, "creatorId": project_id, "creator_handle": clean_target, "creatorHandle": clean_target, "createdAt": datetime.utcnow().isoformat(), **body}
                 coll.insert_one(doc)
                 doc.pop("_id", None)
                 return doc
