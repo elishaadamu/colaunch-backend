@@ -649,6 +649,9 @@ class SyncRequest(BaseModel):
     youtube_connection: Optional[Dict[str, Any]] = None
     meta_connection: Optional[Dict[str, Any]] = None
     accounts_platforms: Optional[Dict[str, Any]] = None
+    community_data: Optional[Dict[str, Any]] = None
+    marketing_data: Optional[Dict[str, Any]] = None
+    products_data: Optional[Dict[str, Any]] = None
 
 @app.post("/api/auth/signup")
 def auth_signup(req: SignupRequest, request: Request):
@@ -1210,6 +1213,9 @@ def auth_sync(req: SyncRequest):
     if req.youtube_connection is not None: update_fields["youtube_connection"] = req.youtube_connection
     if req.meta_connection is not None: update_fields["meta_connection"] = req.meta_connection
     if req.accounts_platforms is not None: update_fields["accounts_platforms"] = req.accounts_platforms
+    if req.community_data is not None: update_fields["community_data"] = req.community_data
+    if req.marketing_data is not None: update_fields["marketing_data"] = req.marketing_data
+    if req.products_data is not None: update_fields["products_data"] = req.products_data
 
     clean_u = (req.username or "").strip()
     if update_fields and clean_u:
@@ -1225,6 +1231,166 @@ def auth_sync(req: SyncRequest):
             u_coll.update_one({"username": clean_u}, {"$set": update_fields}, upsert=True)
 
     return {"status": "success"}
+
+
+# ── Dedicated Dashboard MongoDB Persistence Endpoints ─────────────────────────
+
+class DashboardSaveRequest(BaseModel):
+    username: str
+    handle: Optional[str] = None
+    section: str  # 'calendar', 'studio', 'community', 'marketing', 'products', 'accounts', 'creator', 'all'
+    data: Dict[str, Any]
+
+
+@app.options("/api/dashboard/save")
+def options_dashboard_save(request: Request):
+    origin = get_cors_origin(request)
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, X-Requested-With",
+            "Access-Control-Max-Age": "86400"
+        }
+    )
+
+
+@app.options("/api/dashboard/data")
+def options_dashboard_data(request: Request):
+    origin = get_cors_origin(request)
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, X-Requested-With",
+            "Access-Control-Max-Age": "86400"
+        }
+    )
+
+
+@app.get("/api/dashboard/data")
+def get_dashboard_data(username: Optional[str] = None, handle: Optional[str] = None, request: Request = None):
+    """Retrieves all dashboard sections directly from MongoDB Atlas."""
+    from app.mongodb import get_collection
+    from fastapi import HTTPException
+
+    u_coll = get_collection("user_profiles")
+    if u_coll is None:
+        raise HTTPException(status_code=500, detail="Database connection unavailable")
+
+    clean_u = (username or "").strip()
+    clean_h = (handle or "").strip().lower().lstrip("@")
+
+    query = []
+    if clean_u:
+        query.extend([
+            {"username": clean_u},
+            {"username": clean_u.lower()},
+            {"email": clean_u.lower()}
+        ])
+    if clean_h and clean_h != "default":
+        query.extend([
+            {"creator_data.handle": f"@{clean_h}"},
+            {"creator_data.handle": clean_h},
+            {"username": clean_h}
+        ])
+
+    m_user = None
+    if query:
+        m_user = u_coll.find_one({"$or": query})
+    if not m_user:
+        m_user = u_coll.find_one(sort=[("_id", -1)])
+
+    if not m_user:
+        return {
+            "status": "success",
+            "username": clean_u,
+            "creator_data": {},
+            "calendar_data": {},
+            "studio_data": {},
+            "community_data": {},
+            "marketing_data": {},
+            "products_data": {},
+            "youtube_connection": {},
+            "meta_connection": {},
+            "accounts_platforms": {}
+        }
+
+    return {
+        "status": "success",
+        "username": m_user.get("username", clean_u),
+        "email": m_user.get("email", ""),
+        "creator_data": m_user.get("creator_data") or {},
+        "calendar_data": m_user.get("calendar_data") or {},
+        "studio_data": m_user.get("studio_data") or {},
+        "community_data": m_user.get("community_data") or {},
+        "marketing_data": m_user.get("marketing_data") or {},
+        "products_data": m_user.get("products_data") or {},
+        "youtube_connection": m_user.get("youtube_connection") or {},
+        "meta_connection": m_user.get("meta_connection") or {},
+        "accounts_platforms": m_user.get("accounts_platforms") or {}
+    }
+
+
+@app.post("/api/dashboard/save")
+def save_dashboard_data(req: DashboardSaveRequest, request: Request = None):
+    """Saves a specific dashboard section directly to MongoDB Atlas."""
+    from app.mongodb import get_collection
+    from fastapi import HTTPException
+
+    u_coll = get_collection("user_profiles")
+    if u_coll is None:
+        raise HTTPException(status_code=500, detail="Database connection unavailable")
+
+    clean_u = (req.username or "").strip()
+    clean_h = (req.handle or "").strip().lower().lstrip("@")
+
+    update_fields = {}
+    sec = req.section.lower().strip()
+    if sec == "calendar":
+        update_fields["calendar_data"] = req.data
+    elif sec == "studio":
+        update_fields["studio_data"] = req.data
+    elif sec == "community":
+        update_fields["community_data"] = req.data
+    elif sec == "marketing":
+        update_fields["marketing_data"] = req.data
+    elif sec == "products":
+        update_fields["products_data"] = req.data
+    elif sec == "accounts":
+        update_fields["accounts_platforms"] = req.data
+    elif sec == "creator":
+        update_fields["creator_data"] = req.data
+    elif sec == "all":
+        for k, v in req.data.items():
+            update_fields[k] = v
+    else:
+        update_fields[f"{sec}_data"] = req.data
+
+    if not clean_u and not clean_h:
+        raise HTTPException(status_code=400, detail="Username or handle is required")
+
+    match_query = []
+    if clean_u:
+        match_query.extend([
+            {"username": clean_u},
+            {"username": clean_u.lower()},
+            {"email": clean_u.lower()}
+        ])
+    if clean_h and clean_h != "default":
+        match_query.extend([
+            {"creator_data.handle": f"@{clean_h}"},
+            {"creator_data.handle": clean_h},
+            {"username": clean_h}
+        ])
+
+    res = u_coll.update_many({"$or": match_query}, {"$set": update_fields})
+    if res.matched_count == 0:
+        u_coll.update_one({"username": clean_u or clean_h}, {"$set": update_fields}, upsert=True)
+
+    return {"status": "success", "section": sec}
 
 
 # ── Dedicated Chat Persistence Endpoints ─────────────────────────────────────
@@ -1557,7 +1723,10 @@ def get_user_profile(username: str):
             "ai_keys": None,
             "youtube_connection": None,
             "meta_connection": None,
-            "accounts_platforms": None
+            "accounts_platforms": None,
+            "community_data": None,
+            "marketing_data": None,
+            "products_data": None
         }
 
     return {
@@ -1573,7 +1742,10 @@ def get_user_profile(username: str):
         "ai_keys": m_user.get("ai_keys"),
         "youtube_connection": m_user.get("youtube_connection"),
         "meta_connection": m_user.get("meta_connection"),
-        "accounts_platforms": m_user.get("accounts_platforms")
+        "accounts_platforms": m_user.get("accounts_platforms"),
+        "community_data": m_user.get("community_data"),
+        "marketing_data": m_user.get("marketing_data"),
+        "products_data": m_user.get("products_data")
     }
 
 
