@@ -646,6 +646,9 @@ class SyncRequest(BaseModel):
     launch_pack_data: Optional[Dict[str, Any]] = None
     studio_data: Optional[Dict[str, Any]] = None
     chat_data: Optional[Dict[str, Any]] = None
+    youtube_connection: Optional[Dict[str, Any]] = None
+    meta_connection: Optional[Dict[str, Any]] = None
+    accounts_platforms: Optional[Dict[str, Any]] = None
 
 @app.post("/api/auth/signup")
 def auth_signup(req: SignupRequest, request: Request):
@@ -828,6 +831,9 @@ def auth_login(req: LoginRequest, request: Request):
                     "studio_data": m_user.get("studio_data"),
                     "chat_data": m_user.get("chat_data"),
                     "ai_keys": m_user.get("ai_keys"),
+                    "youtube_connection": m_user.get("youtube_connection"),
+                    "meta_connection": m_user.get("meta_connection"),
+                    "accounts_platforms": m_user.get("accounts_platforms"),
                     "has_password": True
                 },
                 headers=cors_headers
@@ -977,6 +983,9 @@ def auth_verify_code(req: VerifyCodeRequest, request: Request):
     chat_data = (m_user.get("chat_data") if m_user else None)
     ai_keys = (m_user.get("ai_keys") if m_user else None)
     has_password = bool(m_user and m_user.get("password"))
+    youtube_connection = (m_user.get("youtube_connection") if m_user else None)
+    meta_connection = (m_user.get("meta_connection") if m_user else None)
+    accounts_platforms = (m_user.get("accounts_platforms") if m_user else None)
 
     return JSONResponse(
         status_code=200,
@@ -991,6 +1000,9 @@ def auth_verify_code(req: VerifyCodeRequest, request: Request):
             "studio_data": studio_data,
             "chat_data": chat_data,
             "ai_keys": ai_keys,
+            "youtube_connection": youtube_connection,
+            "meta_connection": meta_connection,
+            "accounts_platforms": accounts_platforms,
             "logged_in_via_code": True,
             "has_password": has_password
         },
@@ -1169,6 +1181,9 @@ async def auth_google(req: GoogleAuthRequest, request: Request):
             "studio_data": m_user.get("studio_data"),
             "chat_data": m_user.get("chat_data"),
             "ai_keys": m_user.get("ai_keys"),
+            "youtube_connection": m_user.get("youtube_connection"),
+            "meta_connection": m_user.get("meta_connection"),
+            "accounts_platforms": m_user.get("accounts_platforms"),
             "has_password": bool(m_user.get("has_password")),
             "logged_in_via_google": True
         },
@@ -1192,9 +1207,22 @@ def auth_sync(req: SyncRequest):
     if req.launch_pack_data is not None: update_fields["launch_pack_data"] = req.launch_pack_data
     if req.studio_data is not None: update_fields["studio_data"] = req.studio_data
     if req.chat_data is not None: update_fields["chat_data"] = req.chat_data
+    if req.youtube_connection is not None: update_fields["youtube_connection"] = req.youtube_connection
+    if req.meta_connection is not None: update_fields["meta_connection"] = req.meta_connection
+    if req.accounts_platforms is not None: update_fields["accounts_platforms"] = req.accounts_platforms
 
-    if update_fields:
-        u_coll.update_one({"username": req.username}, {"$set": update_fields}, upsert=True)
+    clean_u = (req.username or "").strip()
+    if update_fields and clean_u:
+        res = u_coll.update_many(
+            {"$or": [
+                {"username": clean_u},
+                {"username": clean_u.lower()},
+                {"email": clean_u.lower()}
+            ]},
+            {"$set": update_fields}
+        )
+        if res.matched_count == 0:
+            u_coll.update_one({"username": clean_u}, {"$set": update_fields}, upsert=True)
 
     return {"status": "success"}
 
@@ -1525,7 +1553,11 @@ def get_user_profile(username: str):
             "calendar_data": None,
             "launch_pack_data": None,
             "studio_data": None,
-            "ai_keys": None
+            "chat_data": None,
+            "ai_keys": None,
+            "youtube_connection": None,
+            "meta_connection": None,
+            "accounts_platforms": None
         }
 
     return {
@@ -1537,7 +1569,11 @@ def get_user_profile(username: str):
         "calendar_data": m_user.get("calendar_data"),
         "launch_pack_data": m_user.get("launch_pack_data"),
         "studio_data": m_user.get("studio_data"),
-        "ai_keys": m_user.get("ai_keys")
+        "chat_data": m_user.get("chat_data"),
+        "ai_keys": m_user.get("ai_keys"),
+        "youtube_connection": m_user.get("youtube_connection"),
+        "meta_connection": m_user.get("meta_connection"),
+        "accounts_platforms": m_user.get("accounts_platforms")
     }
 
 

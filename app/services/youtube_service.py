@@ -259,6 +259,50 @@ def save_youtube_connection(identifier: str, token_data: dict, channel_profile: 
     # Also save to "default" if not default
     if clean_id != "default":
         _CONNECTED_CHANNELS["default"] = record
+
+    # Also save permanently to MongoDB Atlas user_profiles
+    try:
+        from app.mongodb import get_collection
+        u_coll = get_collection("user_profiles")
+        if u_coll is not None:
+            update_payload = {
+                "youtube_connection": {
+                    "connected": True,
+                    "channel": channel_profile,
+                    "tokens": {
+                        "access_token": token_data.get("access_token"),
+                        "refresh_token": token_data.get("refresh_token")
+                    },
+                    "connected_at": time.time()
+                },
+                "creator_data.youtube_connected": True,
+                "creator_data.youtube_channel_id": channel_profile.get("id"),
+                "creator_data.channel_title": channel_profile.get("title"),
+                "creator_data.youtube_handle": channel_profile.get("customUrl"),
+                "creator_data.subscribers": channel_profile.get("subscriberCount"),
+                "creator_data.video_count": channel_profile.get("videoCount"),
+            }
+            if clean_id and clean_id != "default":
+                res = u_coll.update_many(
+                    {"$or": [
+                        {"username": clean_id},
+                        {"email": clean_id},
+                        {"creator_data.handle": f"@{clean_id}"},
+                        {"creator_data.handle": clean_id}
+                    ]},
+                    {"$set": update_payload}
+                )
+                if res.matched_count == 0:
+                    recent = u_coll.find_one(sort=[("_id", -1)])
+                    if recent:
+                        u_coll.update_one({"_id": recent["_id"]}, {"$set": update_payload})
+            else:
+                recent = u_coll.find_one(sort=[("_id", -1)])
+                if recent:
+                    u_coll.update_one({"_id": recent["_id"]}, {"$set": update_payload})
+    except Exception as mongo_err:
+        logger.warning(f"[YouTube Persistence] Failed saving to MongoDB: {mongo_err}")
+
     return record
 
 
@@ -268,6 +312,32 @@ def get_youtube_connection(identifier: str = "default") -> Dict[str, Any]:
     """
     clean_id = (identifier or "default").replace("@", "").lower().strip()
     record = _CONNECTED_CHANNELS.get(clean_id) or _CONNECTED_CHANNELS.get("default")
+    if not record or not record.get("connected"):
+        # Fallback to MongoDB Atlas
+        try:
+            from app.mongodb import get_collection
+            u_coll = get_collection("user_profiles")
+            if u_coll is not None:
+                doc = None
+                if clean_id and clean_id != "default":
+                    doc = u_coll.find_one({
+                        "$or": [
+                            {"username": clean_id},
+                            {"email": clean_id},
+                            {"creator_data.handle": f"@{clean_id}"},
+                            {"creator_data.handle": clean_id}
+                        ],
+                        "youtube_connection.connected": True
+                    })
+                if not doc:
+                    doc = u_coll.find_one({"youtube_connection.connected": True}, sort=[("_id", -1)])
+                if doc and doc.get("youtube_connection"):
+                    record = doc["youtube_connection"]
+                    _CONNECTED_CHANNELS[clean_id] = record
+                    _CONNECTED_CHANNELS["default"] = record
+        except Exception as mongo_err:
+            logger.warning(f"[YouTube Service] Mongo fallback read notice: {mongo_err}")
+
     if not record or not record.get("connected"):
         return {
             "connected": False,
