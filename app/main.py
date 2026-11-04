@@ -2586,3 +2586,182 @@ def disconnect_youtube_endpoint(
         )
 
 
+# ── Community Broadcast Dispatch Endpoint ───────────────────────────────────
+
+class CommunityBroadcastPayload(BaseModel):
+    handle: Optional[str] = "creator"
+    creator_name: Optional[str] = "Creator"
+    product_name: Optional[str] = "Community"
+    subject: str
+    message: str
+    recipients: List[Any] = []
+    reply_to: Optional[str] = None
+    from_name: Optional[str] = None
+
+
+@app.options("/api/community/broadcast")
+def community_broadcast_options(request: Request):
+    origin = get_cors_origin(request)
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
+@app.post("/api/community/broadcast")
+def community_broadcast_endpoint(req: CommunityBroadcastPayload, request: Request):
+    """
+    Delivers a real broadcast email to community members using configured email providers
+    (Brevo Port 443 HTTPS / Google SMTP / Resend / SendGrid).
+    """
+    origin = get_cors_origin(request)
+    cors_headers = {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
+
+    if not req.subject or not req.subject.strip():
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "Subject line is required."},
+            headers=cors_headers
+        )
+
+    if not req.message or not req.message.strip():
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "Message body is required."},
+            headers=cors_headers
+        )
+
+    from app.integrations.email_provider import email_provider
+
+    # Extract and normalize recipient email addresses
+    valid_recipients = []
+    seen = set()
+
+    for item in req.recipients or []:
+        raw_email = ""
+        r_name = ""
+        if isinstance(item, dict):
+            raw_email = (item.get("email") or item.get("contactEmail") or "").strip()
+            r_name = (item.get("name") or "").strip()
+        elif isinstance(item, str):
+            raw_email = item.strip()
+
+        norm = raw_email.lower()
+        if not norm or "@" not in norm or "." not in norm.split("@")[-1]:
+            continue
+        # Avoid standard mock dummy addresses
+        if norm.endswith("@example.com") or norm in ("sarah@lin.dev", "alex@rivera.io"):
+            continue
+        if norm not in seen:
+            seen.add(norm)
+            valid_recipients.append({"email": norm, "name": r_name})
+
+    # If reply_to is provided and no valid recipients were in the list, use reply_to as target
+    if not valid_recipients and req.reply_to and "@" in req.reply_to:
+        norm = req.reply_to.strip().lower()
+        if norm not in seen:
+            seen.add(norm)
+            valid_recipients.append({"email": norm, "name": req.creator_name or "Creator"})
+
+    if not valid_recipients:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "detail": "No valid recipient email addresses found. Please enter or select at least one recipient email."
+            },
+            headers=cors_headers
+        )
+
+    from app.services.email_template import format_luxury_html_email
+
+    sender_display = req.from_name or f"{req.creator_name} · {req.product_name}"
+    subject_line = req.subject.strip()
+    raw_message = req.message.strip()
+
+    body_html = format_luxury_html_email(
+        body_text=raw_message,
+        subject=subject_line,
+        creator_name=req.creator_name or "Creator"
+    )
+
+    successful = []
+    failed = []
+    errors = []
+
+    for r in valid_recipients:
+        target_email = r["email"]
+        try:
+            email_provider.send(
+                to_email=target_email,
+                subject=subject_line,
+                body_html=body_html,
+                body_text=raw_message,
+                from_name=sender_display,
+                reply_to=req.reply_to
+            )
+            successful.append(target_email)
+            logger.info(f"[Broadcast] Successfully delivered to {target_email}")
+        except Exception as err:
+            err_msg = str(err)
+            logger.error(f"[Broadcast] Failed delivery to {target_email}: {err_msg}")
+            failed.append({"email": target_email, "error": err_msg})
+            errors.append(f"{target_email}: {err_msg}")
+
+    # Persist broadcast log in MongoDB if available
+    try:
+        from app.mongodb import get_mongo_db
+        db = get_mongo_db()
+        if db is not None:
+            b_coll = db["community_broadcasts"]
+            b_coll.insert_one({
+                "handle": req.handle,
+                "subject": subject_line,
+                "message": raw_message,
+                "creator_name": req.creator_name,
+                "product_name": req.product_name,
+                "sent_count": len(successful),
+                "failed_count": len(failed),
+                "recipients": successful,
+                "sent_at": datetime.utcnow()
+            })
+    except Exception as db_err:
+        logger.warning(f"[Broadcast] Failed to log broadcast in MongoDB: {db_err}")
+
+    if not successful and failed:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "status": "error",
+                "detail": f"Failed to deliver email: {'; '.join(errors[:3])}",
+                "failed": failed,
+                "sent_count": 0
+            },
+            headers=cors_headers
+        )
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "message": f"Broadcast delivered to {len(successful)} inbox(es) successfully.",
+            "sent_count": len(successful),
+            "failed_count": len(failed),
+            "recipients": successful,
+            "errors": errors if failed else []
+        },
+        headers=cors_headers
+    )
+
+
+
