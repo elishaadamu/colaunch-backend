@@ -558,6 +558,7 @@ class SignupRequest(BaseModel):
     username: str
     email: Optional[str] = None
     password: Optional[str] = None
+    recaptcha_token: Optional[str] = None
     creator_data: Optional[Dict[str, Any]] = None
     calendar_data: Optional[Dict[str, Any]] = None
     launch_pack_data: Optional[Dict[str, Any]] = None
@@ -665,6 +666,30 @@ def auth_signup(req: SignupRequest, request: Request):
         raise HTTPException(status_code=500, detail="Database connection unavailable")
 
     norm_email = req.email.strip().lower() if (req.email and req.email.strip()) else None
+
+    # Verify Google reCAPTCHA v3 token if provided
+    if req.recaptcha_token:
+        try:
+            import urllib.request
+            import urllib.parse
+            import json
+            import os
+            secret = os.getenv("RECAPTCHA_SECRET_KEY", "6Ldo3xEuAAAAAOs-2VVkkcVnEJCvWTdqtDwGjOag")
+            if secret:
+                v_data = urllib.parse.urlencode({"secret": secret, "response": req.recaptcha_token}).encode()
+                v_req = urllib.request.Request(
+                    "https://www.google.com/recaptcha/api/siteverify",
+                    data=v_data,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                )
+                with urllib.request.urlopen(v_req, timeout=5) as resp:
+                    v_res = json.loads(resp.read().decode())
+                    if not v_res.get("success"):
+                        logger.warning(f"[reCAPTCHA v3 Notice] Siteverify response: {v_res}")
+                    else:
+                        logger.info(f"[reCAPTCHA v3] Verified interaction. Score: {v_res.get('score')}")
+        except Exception as e:
+            logger.warning(f"[reCAPTCHA v3 Exception] {e}")
 
     # Check unique constraints in MongoDB Atlas
     if norm_email:
