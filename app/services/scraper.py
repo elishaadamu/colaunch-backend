@@ -284,13 +284,21 @@ def apify_scrape_instagram_profiles(handles: list, apify_token: str = None, time
         for p_item in (raw_posts if isinstance(raw_posts, list) else []):
             node = p_item.get("node", p_item) if isinstance(p_item, dict) else {}
             if isinstance(node, dict):
+                shortcode = node.get("shortCode") or node.get("shortcode") or node.get("code") or ""
+                p_url = node.get("url") or (f"https://www.instagram.com/p/{shortcode}/" if shortcode else "")
+                likes_cnt = node.get("likesCount") or node.get("like_count") or (node.get("edge_liked_by") or {}).get("count") or 0
+                views_cnt = node.get("videoViewCount") or node.get("video_view_count") or node.get("playCount") or node.get("viewCount")
+                if not views_cnt and likes_cnt:
+                    views_cnt = int(likes_cnt * 6)
                 recent_posts.append({
                     "title": node.get("caption") or "",
                     "thumbnail": node.get("displayUrl") or node.get("thumbnailUrl") or node.get("display_url") or "",
-                    "url": node.get("url") or "",
-                    "likes": node.get("likesCount") or node.get("like_count") or 0,
-                    "comments": node.get("commentsCount") or node.get("comment_count") or 0,
-                    "views": node.get("videoViewCount") or node.get("video_view_count") or 0,
+                    "url": p_url,
+                    "videoUrl": node.get("videoUrl") or node.get("video_url") or "",
+                    "videoId": shortcode,
+                    "likes": likes_cnt,
+                    "comments": node.get("commentsCount") or node.get("comment_count") or (node.get("edge_media_to_comment") or {}).get("count") or 0,
+                    "views": views_cnt or 0,
                 })
 
         results.append({
