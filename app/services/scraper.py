@@ -71,6 +71,32 @@ def _first_value(data: dict, *keys):
     return 0
 
 
+def clean_post_title(raw_title: str, max_length: int = 75) -> str:
+    """
+    Truncate long Instagram or TikTok captions into a clean, punchy post title.
+    Preserves original text in 'caption' while providing a clean headline for 'title'.
+    """
+    if not raw_title or not isinstance(raw_title, str):
+        return ""
+    s = raw_title.strip()
+    if not s:
+        return ""
+    lines = [line.strip() for line in s.splitlines() if line.strip()]
+    if lines and len(lines[0]) >= 8 and not lines[0].startswith("http"):
+        s = lines[0]
+    s = re.sub(r"^[#@\s•\-*]+", "", s).strip()
+    match = re.match(r"^([^.!?|·—\n]{12,80})[.!?|·—]", s)
+    if match and len(match.group(1).strip()) >= 12:
+        return match.group(1).strip()
+    if len(s) > max_length:
+        cut = s[:max_length]
+        last_sp = cut.rfind(" ")
+        if last_sp > 24:
+            return re.sub(r"[,:;\-–—]+$", "", cut[:last_sp].strip()) + "..."
+        return re.sub(r"[,:;\-–—]+$", "", cut.strip()) + "..."
+    return s
+
+
 def _apify_run(actor_id: str, run_input: dict, api_key: str, timeout_secs: int = 25) -> list:
     """
     Run an Apify actor and return dataset items.
@@ -198,8 +224,10 @@ def apify_scrape_tiktok_profiles(handles: list, apify_token: str = None, timeout
         for v in (raw_videos if isinstance(raw_videos, list) else []):
             if isinstance(v, dict):
                 meta = v.get("videoMeta") or {}
+                raw_caption = v.get("text") or v.get("desc") or meta.get("desc") or ""
                 recent_posts.append({
-                    "title": v.get("text") or v.get("desc") or "",
+                    "title": clean_post_title(raw_caption, 75),
+                    "caption": raw_caption,
                     "thumbnail": meta.get("coverUrl") or v.get("coverUrl") or "",
                     "url": v.get("webVideoUrl") or "",
                     "likes": v.get("diggCount") or 0,
@@ -290,8 +318,10 @@ def apify_scrape_instagram_profiles(handles: list, apify_token: str = None, time
                 views_cnt = node.get("videoViewCount") or node.get("video_view_count") or node.get("playCount") or node.get("viewCount")
                 if not views_cnt and likes_cnt:
                     views_cnt = int(likes_cnt * 6)
+                raw_caption = node.get("caption") or ""
                 recent_posts.append({
-                    "title": node.get("caption") or "",
+                    "title": clean_post_title(raw_caption, 75),
+                    "caption": raw_caption,
                     "thumbnail": node.get("displayUrl") or node.get("thumbnailUrl") or node.get("display_url") or "",
                     "url": p_url,
                     "videoUrl": node.get("videoUrl") or node.get("video_url") or "",
