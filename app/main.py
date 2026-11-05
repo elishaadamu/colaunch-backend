@@ -2683,11 +2683,38 @@ def community_broadcast_endpoint(req: CommunityBroadcastPayload, request: Reques
             headers=cors_headers
         )
 
-    from app.services.email_template import format_luxury_html_email
+    from app.services.email_template import format_luxury_html_email, _get_frontend_base
 
     sender_display = req.from_name or f"{req.creator_name} · {req.product_name}"
     subject_line = req.subject.strip()
     raw_message = req.message.strip()
+
+    # Resolve live Member Dashboard destination URL for this creator
+    clean_handle = (req.handle or "").lstrip("@").strip() or "creator"
+    frontend_base = _get_frontend_base() or "https://app.co-launch.app"
+    if "creator-forge-frontend.vercel.app" in frontend_base or not frontend_base:
+        frontend_base = "https://app.co-launch.app"
+    portal_url = f"{frontend_base}/member/{clean_handle}"
+
+    # Universal placeholder replacement: replace any bracketed CTA link placeholder with the live member portal link
+    raw_message = re.sub(
+        r'\[Link to your documentation/GitHub/blog post here\]',
+        portal_url,
+        raw_message,
+        flags=re.IGNORECASE
+    )
+    raw_message = re.sub(
+        r'\[Link to Documentation/GitHub/Landing Page\]',
+        portal_url,
+        raw_message,
+        flags=re.IGNORECASE
+    )
+    raw_message = re.sub(
+        r'\[(?:Link to [^\]]+|[^\]]*(?:link|url|github|documentation|blog|landing|waitlist|page|here)[^\]]*)\]',
+        portal_url,
+        raw_message,
+        flags=re.IGNORECASE
+    )
 
     body_html = format_luxury_html_email(
         body_text=raw_message,
