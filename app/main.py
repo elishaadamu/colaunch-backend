@@ -1179,6 +1179,17 @@ async def auth_google(req: GoogleAuthRequest, request: Request):
                 }
 
     # If new user, create their profile immediately
+    is_existing_user = bool(m_user)
+    has_completed_onboarding = False
+    if m_user:
+        c_data = m_user.get("creator_data") or {}
+        has_completed_onboarding = bool(
+            c_data.get("blueprint") or
+            c_data.get("productName") or
+            m_user.get("calendar_data") or
+            m_user.get("onboarding_completed")
+        )
+
     if not m_user:
         clean_user = re.sub(r"[^a-zA-Z0-9_]", "", (name or email.split("@")[0]).lower()) or "creator"
         new_profile = {
@@ -1220,7 +1231,9 @@ async def auth_google(req: GoogleAuthRequest, request: Request):
             "meta_connection": m_user.get("meta_connection"),
             "accounts_platforms": m_user.get("accounts_platforms"),
             "has_password": bool(m_user.get("has_password")),
-            "logged_in_via_google": True
+            "logged_in_via_google": True,
+            "is_existing_user": is_existing_user,
+            "has_completed_onboarding": has_completed_onboarding
         },
         headers=cors_headers
     )
