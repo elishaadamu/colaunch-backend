@@ -692,14 +692,21 @@ def auth_signup(req: SignupRequest, request: Request):
             logger.warning(f"[reCAPTCHA v3 Exception] {e}")
 
     # Check unique constraints in MongoDB Atlas
+    import re
     if norm_email:
-        m_existing = u_coll.find_one({"email": norm_email, "username": {"$ne": req.username}})
+        m_existing = u_coll.find_one({
+            "email": {"$regex": f"^{re.escape(norm_email)}$", "$options": "i"}
+        })
         if m_existing:
-            raise HTTPException(status_code=400, detail="Email already registered by another account")
+            raise HTTPException(status_code=400, detail="An account with this email already exists. Please sign in instead.")
 
     m_user = u_coll.find_one({"username": req.username})
     now = datetime.utcnow()
     if m_user:
+        # If user already registered with a password or email, reject duplicate registration
+        if m_user.get("has_password") or m_user.get("password") or m_user.get("email"):
+            raise HTTPException(status_code=400, detail="An account with this username or email already exists. Please sign in instead.")
+
         update_fields = {"updated_at": now}
         if norm_email is not None:
             update_fields["email"] = norm_email

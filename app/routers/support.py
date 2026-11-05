@@ -60,7 +60,9 @@ def _format_admin_escalation_email(
     creator_email: str = None
 ):
     clean_h = (creator_handle or "").lstrip("@").strip()
-    handle = f"@{clean_h}" if clean_h else "@creator"
+    if clean_h in ["default", "creator"]:
+        clean_h = ""
+    handle = f"@{clean_h}" if clean_h else "(Unlinked - No Social Account Connected)"
     name = creator_name or "Creator"
     niche = creator_context.get("niche", "Not specified")
     followers = creator_context.get("followers", "Unknown")
@@ -71,8 +73,8 @@ def _format_admin_escalation_email(
     pricing = creator_context.get("pricing", "Standard tier")
     
     cid = creator_id or creator_context.get("id") or creator_context.get("creator_id") or creator_context.get("channelId") or ""
-    if not cid and clean_h:
-        cid = f"cr_{clean_h.lower()}"
+    if not cid or cid.startswith("cr_"):
+        cid = f"cr_{clean_h.lower()}" if clean_h else "cr_unlinked"
         
     base_url = (settings.FRONTEND_URL or "https://app.co-launch.app").rstrip("/")
     dashboard_url = f"{base_url}/dashboard/{cid}" if cid else f"{base_url}/dashboard"
@@ -566,11 +568,11 @@ def post_support_message(req: SupportMessageRequest, db: Session = Depends(get_d
     session_id = req.session_id or f"session_{uuid.uuid4().hex[:12]}"
     context = req.creator_context or {}
     raw_handle = req.creator_handle or ""
-    clean_handle = raw_handle.lstrip("@").strip()
-    display_handle = f"@{clean_handle}" if clean_handle else "@creator"
+    clean_handle = raw_handle.lstrip("@").strip() if (raw_handle and raw_handle not in ["default", "@creator", "creator"]) else ""
+    display_handle = f"@{clean_handle}" if clean_handle else ""
     creator_id = (req.creator_id or context.get("id") or context.get("creator_id") or context.get("channelId") or "").strip()
-    if not creator_id and clean_handle:
-        creator_id = f"cr_{clean_handle.lower()}"
+    if not creator_id or creator_id.startswith("cr_"):
+        creator_id = f"cr_{clean_handle.lower()}" if clean_handle else "cr_unlinked"
     creator_name = req.creator_name or "Creator"
     creator_email = (req.creator_email or context.get("email") or context.get("contactEmail") or "").strip()
 
@@ -807,10 +809,12 @@ def escalate_to_admin(req: SupportEscalateRequest, db: Session = Depends(get_db)
     session_id = req.session_id or f"session_{uuid.uuid4().hex[:12]}"
     context = req.creator_context or {}
     creator_id = (req.creator_id or context.get("id") or context.get("creator_id") or context.get("channelId") or "").strip()
-    if not creator_id and req.creator_handle:
+    if not creator_id and req.creator_handle and req.creator_handle not in ["default", "@creator", "creator"]:
         clean_h = req.creator_handle.lstrip("@").strip().lower()
         if clean_h:
             creator_id = f"cr_{clean_h}"
+    if not creator_id:
+        creator_id = "cr_unlinked"
     creator_handle = req.creator_handle or ""
     creator_name = req.creator_name or "Creator"
     creator_email = (req.creator_email or context.get("email") or context.get("contactEmail") or "").strip()
