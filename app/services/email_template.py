@@ -12,7 +12,10 @@ import re
 import html
 import urllib.parse
 from typing import Optional, List, Dict, Any
-import markdown
+try:
+    import markdown
+except ImportError:
+    markdown = None
 
 from app.config import settings
 
@@ -36,25 +39,115 @@ def _get_backend_base() -> str:
     ).rstrip("/")
 
 
-def _render_creator_forge_logo_html(size: int = 28) -> str:
+def _render_colaunch_logo_html(size: int = 30, show_wordmark: bool = True) -> str:
     """
-    Renders the official Creator Forge 4-node geometric symbol using pure HTML tables.
+    Renders the official CoLaunch Rocket symbol & typography using inline SVG and table layout.
     100% email client compatible — zero external image dependency, zero SVG blocking.
     """
-    cell_size = max(10, size // 2 - 3)
+    wordmark_html = ""
+    if show_wordmark:
+        font_sz = max(17, int(size * 0.72))
+        wordmark_html = (
+            f'<td style="vertical-align:middle;padding-left:10px;">'
+            f'<span style="font-family:\'Playfair Display\',Georgia,Cambria,\'Times New Roman\',serif;'
+            f'font-size:{font_sz}px;font-weight:700;color:#0f172a;letter-spacing:-0.5px;line-height:1;">'
+            f'CoLaunch</span></td>'
+        )
+
+    # CoLaunch Rocket Disc Badge SVG (Crisp circular badge with Crimson rocket artwork)
+    rocket_svg = (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;vertical-align:middle;">'
+        f'<circle cx="50" cy="50" r="48" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>'
+        f'<g transform="translate(19.5, 19.5) scale(1.7)">'
+        f'<path fill="#c81e3c" d="M1 17l8-7 16 1 1 16-7 8s.001-5.999-6-12-12-6-12-6z"/>'
+        f'<path fill="#ffac33" d="M.973 35s-.036-7.979 2.985-11S15 21.187 15 21.187 14.999 29 11.999 32c-3 3-11.026 3-11.026 3z"/>'
+        f'<circle fill="#ffcc4d" cx="8.999" cy="27" r="4"/>'
+        f'<path fill="#55acee" d="M35.999 0s-10 0-22 10c-6 5-6 14-4 16s11 2 16-4c10-12 10-22 10-22z"/>'
+        f'<path fill="#292f33" d="M26.999 5c-1.623 0-3.013.971-3.641 2.36.502-.227 1.055-.36 1.641-.36 2.209 0 4 1.791 4 4 0 .586-.133 1.139-.359 1.64 1.389-.627 2.359-2.017 2.359-3.64 0-2.209-1.791-4-4-4z"/>'
+        f'<path fill="#c81e3c" d="M8 28s0-4 1-5 13.001-10.999 14-10-9.001 13-10.001 14S8 28 8 28z"/>'
+        f'</g></svg>'
+    )
+
     return (
-        f'<table border="0" cellspacing="2" cellpadding="0" style="display:inline-table;'
-        f'width:{size}px;height:{size}px;border-collapse:separate;vertical-align:middle;'
-        f'background:#ffffff;padding:2px;border:1px solid #e2e8f0;border-radius:6px;">'
+        f'<table border="0" cellspacing="0" cellpadding="0" style="display:inline-table;vertical-align:middle;">'
         f'<tr>'
-        f'<td style="width:{cell_size}px;height:{cell_size}px;background:#1e293b;border-radius:2px;"></td>'
-        f'<td style="width:{cell_size}px;height:{cell_size}px;background:#0284c7;border-radius:2px;"></td>'
-        f'</tr>'
-        f'<tr>'
-        f'<td style="width:{cell_size}px;height:{cell_size}px;background:#16a34a;border-radius:2px;"></td>'
-        f'<td style="width:{cell_size}px;height:{cell_size}px;background:#0f172a;border-radius:2px;"></td>'
-        f'</tr>'
-        f'</table>'
+        f'<td style="vertical-align:middle;">{rocket_svg}</td>'
+        f'{wordmark_html}'
+        f'</tr></table>'
+    )
+
+
+# Backward-compatible alias
+def _render_creator_forge_logo_html(size: int = 28) -> str:
+    return _render_colaunch_logo_html(size=size, show_wordmark=False)
+
+
+def _svg_calendar_icon() -> str:
+    """Clean SVG calendar vector icon (Zero raw emojis)."""
+    return (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c81e3c" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;">'
+        '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>'
+        '<line x1="16" y1="2" x2="16" y2="6"></line>'
+        '<line x1="8" y1="2" x2="8" y2="6"></line>'
+        '<line x1="3" y1="10" x2="21" y2="10"></line>'
+        '</svg>'
+    )
+
+
+def _svg_video_icon() -> str:
+    """Clean SVG video/diagnostics vector icon (Zero raw emojis)."""
+    return (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c81e3c" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;">'
+        '<polygon points="23 7 16 12 23 17 23 7"></polygon>'
+        '<rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>'
+        '</svg>'
+    )
+
+
+def _svg_rocket_icon() -> str:
+    """Clean SVG rocket monetization vector icon (Zero raw emojis)."""
+    return (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c81e3c" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;">'
+        '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path>'
+        '<path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path>'
+        '<path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"></path>'
+        '<path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path>'
+        '</svg>'
+    )
+
+
+def _svg_reply_icon() -> str:
+    """Clean SVG direct human reply vector icon (Zero raw emojis)."""
+    return (
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#c81e3c" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;">'
+        '<polyline points="9 17 4 12 9 7"></polyline>'
+        '<path d="M20 18v-2a4 4 0 0 0-4-4H4"></path>'
+        '</svg>'
+    )
+
+
+def _svg_clock_icon() -> str:
+    """Clean SVG expiration clock vector icon (Zero raw emojis)."""
+    return (
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c81e3c" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;">'
+        '<circle cx="12" cy="12" r="10"></circle>'
+        '<polyline points="12 6 12 12 16 14"></polyline>'
+        '</svg>'
+    )
+
+
+def _svg_shield_icon() -> str:
+    """Clean SVG security shield vector icon (Zero raw emojis)."""
+    return (
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c81e3c" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;">'
+        '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>'
+        '</svg>'
     )
 
 
@@ -80,7 +173,7 @@ def get_contact_reply_email() -> str:
 
 def _render_executive_signature_html(creator_name: str = "", tracking_token: str = "") -> str:
     """Renders a clean, plain 1-on-1 executive email signature."""
-    logo_html = _render_creator_forge_logo_html(28)
+    logo_html = _render_colaunch_logo_html(size=26, show_wordmark=False)
     contact_email = get_contact_reply_email()
     ref_footnote = ""
     if tracking_token:
@@ -98,11 +191,12 @@ def _render_executive_signature_html(creator_name: str = "", tracking_token: str
         '<div style="font-size:14px;font-weight:700;color:#0f172a;line-height:1.3;">CoLaunch Venture Partnerships</div>'
         '<div style="font-size:13px;color:#64748b;margin-top:2px;">Venture Partnerships • CoLaunch Studio</div>'
         '<div style="font-size:13px;color:#475569;margin-top:6px;line-height:1.6;">'
-        f'<a href="mailto:{contact_email}" style="color:#0f172a;text-decoration:underline;">'
+        f'<a href="mailto:{contact_email}" style="color:#c81e3c;text-decoration:none;font-weight:600;">'
         f'{html.escape(contact_email)}</a>'
         '&nbsp;|&nbsp;'
-        '<a href="https://colaunch.app" style="color:#0284c7;text-decoration:none;">colaunch.app</a>'
+        '<a href="https://colaunch.app" style="color:#0f172a;text-decoration:underline;">colaunch.app</a>'
         '</div>'
+        '<div style="font-size:12px;color:#64748b;margin-top:4px;">Reply directly to this email to reach our studio partners.</div>'
         f'{ref_footnote}'
         '</td></tr></table></div>'
     )
@@ -267,9 +361,9 @@ def _render_single_concept_block(
         '</td></tr></table>'
         '<div style="margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;">'
         f'<a href="{landing_url}" target="_blank" '
-        'style="display:inline-block;padding:9px 18px;background:#0f172a;color:#ffffff;'
+        'style="display:inline-block;padding:9px 18px;background:#c81e3c;color:#ffffff;'
         'text-decoration:none;font-weight:700;font-size:13px;border-radius:6px;margin-bottom:6px;">'
-        '👉 Review Live Concept &amp; Landing Page &rarr;</a>'
+        'Review Live Concept &amp; Landing Page &rarr;</a>'
         f'<div style="font-size:12px;color:#64748b;word-break:break-all;">Direct landing page link: <a href="{landing_url}" target="_blank" style="color:#0284c7;text-decoration:underline;">{html.escape(landing_url)}</a></div>'
         '</div>'
         '</td></tr></table>'
@@ -372,10 +466,15 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
 
     clean_md = "\n".join(normalized_lines)
 
-    raw_html = markdown.markdown(
-        clean_md,
-        extensions=["extra", "sane_lists", "nl2br"]
-    )
+    if markdown is not None:
+        raw_html = markdown.markdown(
+            clean_md,
+            extensions=["extra", "sane_lists", "nl2br"]
+        )
+    else:
+        # Resilient fallback markdown converter for bare environments
+        paragraphs = clean_md.split("\n\n")
+        raw_html = "".join(f"<p>{html.escape(p).replace(chr(10), '<br>')}</p>" for p in paragraphs if p.strip())
 
     raw_html = re.sub(
         r'<p>(.*?)</p>',
@@ -477,7 +576,7 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         return (
             f'<div style="margin:12px 0 16px 0;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid #0f172a;border-radius:6px;">'
             f'<div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Interactive Concept Preview</div>'
-            f'<a href="{url}" target="_blank" style="display:inline-block;padding:8px 16px;background:#0f172a;color:#ffffff;text-decoration:none;font-weight:700;font-size:13px;border-radius:6px;margin-bottom:6px;">👉 Review Live Concept &amp; Landing Page &rarr;</a>'
+            f'<a href="{url}" target="_blank" style="display:inline-block;padding:8px 16px;background:#c81e3c;color:#ffffff;text-decoration:none;font-weight:700;font-size:13px;border-radius:6px;margin-bottom:6px;">Review Live Concept &amp; Landing Page &rarr;</a>'
             f'<div style="font-size:12px;color:#64748b;word-break:break-all;">Direct link: <a href="{url}" target="_blank" style="color:#0284c7;text-decoration:underline;">{url}</a></div>'
             f'</div>'
         )
@@ -599,7 +698,7 @@ def render_otp_verification_email(
 ) -> tuple[str, str]:
     """
     Renders an executive, high-deliverability single-use OTP verification email.
-    Includes <!DOCTYPE html> to prevent clobbering by generic template parsers.
+    Uses clean light canvas with CoLaunch brand identity and inline SVG icons (Zero raw emojis).
     Returns (body_html, body_text).
     """
     clean_name = html.escape(display_name or "Creator")
@@ -620,6 +719,10 @@ def render_otp_verification_email(
         f"{canonical_base}\n"
     )
 
+    logo_html = _render_colaunch_logo_html(size=28, show_wordmark=True)
+    clock_svg = _svg_clock_icon()
+    shield_svg = _svg_shield_icon()
+
     body_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -627,118 +730,115 @@ def render_otp_verification_email(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Your CoLaunch Verification Code</title>
   <style>
-    body {{ margin: 0 !important; padding: 0 !important; background-color: #07090e !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; -webkit-font-smoothing: antialiased; }}
+    body {{ margin: 0 !important; padding: 0 !important; background-color: #f8fafc !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; -webkit-font-smoothing: antialiased; }}
     table {{ border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
     td {{ padding: 0; }}
     img {{ border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }}
     @media only screen and (max-width: 600px) {{
-      .card-body {{ padding: 24px 18px !important; }}
-      .code-display {{ font-size: 32px !important; letter-spacing: 8px !important; }}
+      .card-body {{ padding: 24px 20px !important; }}
+      .code-display {{ font-size: 30px !important; letter-spacing: 6px !important; }}
     }}
   </style>
 </head>
-<body style="margin: 0; padding: 0; background-color: #07090e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #07090e; min-height: 100vh;">
+<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; min-height: 100vh; padding: 36px 12px;">
     <tr>
-      <td align="center" style="padding: 24px 12px;">
+      <td align="center">
         
-        <!-- Main Card Container (Zero Radius, Compact) -->
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 480px; background-color: #0c0f17; border: 1px solid #1e2638; border-radius: 0px;">
+        <!-- Main Card Container -->
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 520px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04); overflow: hidden;">
           
-          <!-- Top Brand Banner with CoLaunch Rocket Logo -->
+          <!-- Top Brand Header -->
           <tr>
-            <td style="padding: 22px 24px 14px 24px; border-bottom: 1px solid #161b2b; text-align: center;">
-              <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center">
+            <td style="padding: 22px 28px 16px 28px; border-bottom: 1px solid #f1f5f9;">
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
                 <tr>
-                  <td style="vertical-align: middle; padding-right: 10px;">
-                    <div style="width: 32px; height: 32px; background-color: #ffffff; border-radius: 50%; text-align: center; line-height: 32px; font-size: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
-                      🚀
-                    </div>
+                  <td align="left" style="vertical-align: middle;">
+                    {logo_html}
                   </td>
-                  <td style="vertical-align: middle;">
-                    <span style="font-family: 'Playfair Display', Georgia, Cambria, 'Times New Roman', serif; font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; line-height: 1;">
-                      CoLaunch
+                  <td align="right" style="vertical-align: middle;">
+                    <span style="display: inline-block; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #c81e3c; background-color: #fef2f2; border: 1px solid #fecdd3; padding: 3px 10px; border-radius: 20px;">
+                      SECURITY PASSCODE
                     </span>
                   </td>
                 </tr>
               </table>
-              <div style="margin-top: 10px;">
-                <span style="display: inline-block; font-family: 'SF Mono', Menlo, Consolas, Courier, monospace; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #ffffff !important; background-color: #c81e3c; border: 1px solid #c81e3c; padding: 2px 8px; border-radius: 0px;">
-                  AUTHENTICATION SECURITY CODE
-                </span>
-              </div>
             </td>
           </tr>
 
-          <!-- Content Body (Tight & Compact) -->
+          <!-- Content Body -->
           <tr>
-            <td class="card-body" style="padding: 22px 24px 18px 24px;">
-              <h2 style="margin: 0 0 8px 0; color: #ffffff; font-size: 18px; font-weight: 800; letter-spacing: -0.3px;">
+            <td class="card-body" style="padding: 28px 30px 22px 30px;">
+              <h2 style="margin: 0 0 10px 0; color: #0f172a; font-family: 'Playfair Display', Georgia, serif; font-size: 22px; font-weight: 700; letter-spacing: -0.3px;">
                 Single-Use Verification Code
               </h2>
-              <p style="margin: 0 0 14px 0; color: #94a3b8; font-size: 13px; line-height: 1.5;">
-                Hello <strong style="color: #f1f5f9;">{clean_name}</strong>, use the secure 6-digit code below to authenticate your CoLaunch creator workspace.
+              <p style="margin: 0 0 18px 0; color: #475569; font-size: 14px; line-height: 1.6;">
+                Hello <strong style="color: #0f172a;">{clean_name}</strong>, use the secure 6-digit verification code below to authenticate your CoLaunch operator workspace.
               </p>
 
-              <!-- 6-Digit Code Box (Monospace & High Legibility, Tighter Padding) -->
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 16px 0;">
+              <!-- 6-Digit Code Box (Monospace & High Legibility) -->
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 20px 0;">
                 <tr>
-                  <td style="background-color: #111624; border: 1px solid #242f48; padding: 16px 12px; text-align: center; border-radius: 0px;">
-                    <div style="font-family: 'SF Mono', Menlo, Consolas, Courier, monospace; font-size: 32px; font-weight: 800; letter-spacing: 10px; color: #ffffff; text-shadow: 0 0 16px rgba(56, 189, 248, 0.35);" class="code-display">
+                  <td style="background-color: #f8fafc; border: 1.5px dashed #cbd5e1; border-radius: 8px; padding: 18px 14px; text-align: center;">
+                    <div style="font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 34px; font-weight: 800; letter-spacing: 10px; color: #0f172a;" class="code-display">
                       {clean_code}
                     </div>
-                    <div style="margin-top: 6px; font-size: 10px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">
+                    <div style="margin-top: 8px; font-size: 11px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">
                       Enter this 6-digit code in the verification prompt
                     </div>
                   </td>
                 </tr>
               </table>
 
-              <!-- Meta / Expiration Details (Tighter Box) -->
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #080b12; border: 1px solid #161b2b; padding: 10px 12px; margin-bottom: 16px; border-radius: 0px;">
+              <!-- Meta / Expiration Details with Clean SVG Icons -->
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px; margin-bottom: 20px;">
                 <tr>
-                  <td style="vertical-align: top; width: 18px; padding-right: 8px; font-size: 13px;">⏱️</td>
-                  <td style="font-size: 11px; color: #cbd5e1; line-height: 1.4;">
-                    <strong style="color: #ffffff;">Valid for 15 minutes.</strong> This code expires automatically for your security.
+                  <td style="vertical-align: middle; width: 22px; padding-right: 10px;">
+                    {clock_svg}
+                  </td>
+                  <td style="font-size: 12px; color: #334155; line-height: 1.5;">
+                    <strong style="color: #0f172a;">Valid for 15 minutes.</strong> This code expires automatically for your security.
                   </td>
                 </tr>
-                <tr><td colspan="2" style="height: 6px;"></td></tr>
+                <tr><td colspan="2" style="height: 8px;"></td></tr>
                 <tr>
-                  <td style="vertical-align: top; width: 18px; padding-right: 8px; font-size: 13px;">🔒</td>
-                  <td style="font-size: 11px; color: #cbd5e1; line-height: 1.4;">
-                    <strong style="color: #ffffff;">Security Alert:</strong> Never share this code. CoLaunch staff will never request your code.
+                  <td style="vertical-align: middle; width: 22px; padding-right: 10px;">
+                    {shield_svg}
+                  </td>
+                  <td style="font-size: 12px; color: #334155; line-height: 1.5;">
+                    <strong style="color: #0f172a;">Security Alert:</strong> Never share this code. CoLaunch staff will never request your code.
                   </td>
                 </tr>
               </table>
 
-              <!-- Action Link (Tighter Button, White Color on Dark Red BG) -->
+              <!-- Action Link -->
               <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
                 <tr>
                   <td align="center">
-                    <a href="{canonical_base}" target="_blank" style="display: inline-block; background-color: #c81e3c; color: #ffffff !important; font-weight: 700; font-size: 12px; text-decoration: none; padding: 10px 26px; border-radius: 0px; letter-spacing: 0.2px; text-transform: uppercase;">
-                      Launch CoLaunch Workspace →
+                    <a href="{canonical_base}" target="_blank" style="display: inline-block; background-color: #c81e3c; color: #ffffff !important; font-weight: 700; font-size: 13px; text-decoration: none; padding: 12px 30px; border-radius: 8px; letter-spacing: 0.3px; text-transform: uppercase; box-shadow: 0 4px 12px rgba(200, 30, 60, 0.25);">
+                      Launch CoLaunch Workspace &rarr;
                     </a>
                   </td>
                 </tr>
               </table>
 
-              <p style="margin: 18px 0 0 0; color: #475569; font-size: 11px; line-height: 1.4; text-align: center;">
-                If you did not request this verification code, someone may have mistyped their email. No action is required.
+              <p style="margin: 20px 0 0 0; color: #64748b; font-size: 12px; line-height: 1.5; text-align: center;">
+                If you did not request this verification code, someone may have entered your email by mistake. No action is required.
               </p>
             </td>
           </tr>
 
           <!-- Footer -->
           <tr>
-            <td style="padding: 16px 24px; border-top: 1px solid #161b2b; text-align: center; background-color: #080b12;">
-              <p style="margin: 0 0 4px 0; color: #64748b; font-size: 11px; font-weight: 600;">
-                CoLaunch • Turn your audience into a software business
+            <td style="padding: 18px 28px; border-top: 1px solid #f1f5f9; text-align: center; background-color: #f8fafc;">
+              <p style="margin: 0 0 4px 0; color: #64748b; font-size: 12px; font-weight: 600;">
+                CoLaunch • Turn your audience into a software enterprise
               </p>
-              <p style="margin: 0; color: #334155; font-size: 10px;">
+              <p style="margin: 0; color: #94a3b8; font-size: 11px;">
                 <a href="{canonical_base}" style="color: #64748b; text-decoration: underline;">{canonical_base.replace('https://', '')}</a> • Dedicated Creator Workspace
               </p>
-              <p style="margin: 6px 0 0 0; color: #1e293b; font-size: 9px;">
-                © 2026 CoLaunch Technologies Inc. All rights reserved.
+              <p style="margin: 6px 0 0 0; color: #94a3b8; font-size: 10px;">
+                &copy; 2026 CoLaunch Technologies Inc. All rights reserved.
               </p>
             </td>
           </tr>
@@ -759,139 +859,271 @@ def render_welcome_signup_email(
     base_url: str = "https://app.co-launch.app"
 ) -> tuple[str, str]:
     """
-    Renders an executive, branded CoLaunch Account Creation / Welcome email.
-    Includes <!DOCTYPE html> for standard client rendering.
+    Renders an executive, creative CoLaunch Account Creation / Onboarding email.
+    Features:
+    1. CoLaunch Rocket Logo badge & Playfair Display serif wordmark.
+    2. Crimson (#C81E3C) & Slate (#0F172A) brand styling on clean light canvas (#F8FAFC).
+    3. Tactile primary onboarding CTA button (Just Eat & Headway pattern).
+    4. "Three hints on how to use CoLaunch" with clean inline SVG icons (Zero emojis).
+    5. "Workspace Access Details" credentials box (Just Eat pattern).
+    6. Direct 2-Way Human Reply Line to invite real founder responses (NOT an impersonal newsletter).
+    7. High-deliverability HTML layout compatible with Gmail, Apple Mail, and Outlook.
     Returns (body_html, body_text).
     """
     clean_user = html.escape(username or "Creator")
     canonical_base = base_url.rstrip("/")
 
     body_text = (
-        f"WELCOME TO COLAUNCH\n\n"
-        f"Hello {username},\n\n"
-        f"Congratulations! Your creator software console is fully provisioned and secured on MongoDB Atlas.\n\n"
-        f"Platform Capabilities:\n"
-        f"- Autonomous Content Calendar: Generate, schedule, and publish omnichannel campaigns in 1 click.\n"
-        f"- AI Video Performance Studio: Continuous self-improving diagnostics that analyze video weaknesses and refine upcoming content.\n"
-        f"- Omnichannel Distribution: Direct authorized pipeline across YouTube, Instagram, TikTok, and X.\n"
-        f"- Privacy-Enforced Sandbox: Your API keys and tokens remain strictly protected.\n\n"
-        f"Launch your workspace: {canonical_base}/dashboard\n\n"
-        f"— The CoLaunch Team\n"
+        f"COLAUNCH — OPERATOR ONBOARDING\n\n"
+        f"You're ready to build & co-launch\n"
+        f"Hello {username}, welcome to CoLaunch!\n\n"
+        f"Your private creator software console is fully provisioned and initialized.\n"
+        f"We partner 50/50 with you to turn your audience attention into a defensible, high-margin software enterprise.\n\n"
+        f"Launch your workspace:\n"
+        f"{canonical_base}/dashboard\n\n"
+        f"THREE HINTS ON HOW TO USE COLAUNCH:\n"
+        f"1. Autonomous Content Calendar: Plan, schedule, and orchestrate omnichannel video and social releases across YouTube, Instagram, and TikTok from a single calendar.\n"
+        f"2. AI Video Performance Studio: Continuous self-improving diagnostics that analyze video drop-offs and generate corrective hooks for your next release.\n"
+        f"3. 50/50 Co-Founder Monetization: Review tailored custom software concepts for your audience with zero upfront engineering or hosting cost.\n\n"
+        f"WORKSPACE ACCESS DETAILS:\n"
+        f"• Authorized Username: {username}\n"
+        f"• Dedicated Console: {canonical_base}/dashboard\n"
+        f"• Workspace Tier: Co-Founder Partner (Full Studio Access)\n"
+        f"• Status: Active & Provisioned\n\n"
+        f"DIRECT HUMAN RESPONSE LINE:\n"
+        f"Have questions or want to discuss your audience? Simply reply directly to this email.\n"
+        f"You won't get routed to a ticketing bot — our venture partners and lead engineers read and answer every founder message personally.\n\n"
+        f"We wish you a rapid journey to scale and recurring revenue,\n"
+        f"— The CoLaunch Venture Studio Team\n"
         f"{canonical_base}\n"
     )
+
+    logo_html = _render_colaunch_logo_html(size=30, show_wordmark=True)
+    calendar_svg = _svg_calendar_icon()
+    video_svg = _svg_video_icon()
+    rocket_svg = _svg_rocket_icon()
+    reply_svg = _svg_reply_icon()
 
     body_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Welcome to CoLaunch</title>
+  <title>Welcome to CoLaunch — You're Ready to Build</title>
   <style>
-    body {{ margin: 0 !important; padding: 0 !important; background-color: #07090e !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; -webkit-font-smoothing: antialiased; }}
+    body {{ margin: 0 !important; padding: 0 !important; background-color: #f8fafc !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; -webkit-font-smoothing: antialiased; }}
     table {{ border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
     td {{ padding: 0; }}
-    @media only screen and (max-width: 600px) {{
-      .card-body {{ padding: 24px 18px !important; }}
+    img {{ border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }}
+    @media only screen and (max-width: 620px) {{
+      .card-body {{ padding: 26px 18px !important; }}
+      .header-cell {{ padding: 20px 18px 14px 18px !important; }}
+      .hint-title {{ font-size: 13px !important; }}
     }}
   </style>
 </head>
-<body style="margin: 0; padding: 0; background-color: #07090e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #07090e; min-height: 100vh;">
+<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; min-height: 100vh; padding: 36px 12px;">
     <tr>
-      <td align="center" style="padding: 24px 12px;">
+      <td align="center">
         
-        <!-- Main Card Container (Zero Radius, Compact) -->
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 480px; background-color: #0c0f17; border: 1px solid #1e2638; border-radius: 0px;">
+        <!-- Main Card Container -->
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 580px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 24px rgba(15, 23, 42, 0.05); overflow: hidden;">
           
-          <!-- Top Header -->
+          <!-- Top Brand Header Bar -->
           <tr>
-            <td style="padding: 22px 24px 14px 24px; border-bottom: 1px solid #161b2b; text-align: center;">
-              <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center">
+            <td class="header-cell" style="padding: 24px 32px 18px 32px; border-bottom: 1px solid #f1f5f9;">
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
                 <tr>
-                  <td style="vertical-align: middle; padding-right: 10px;">
-                    <div style="width: 32px; height: 32px; background-color: #ffffff; border-radius: 50%; text-align: center; line-height: 32px; font-size: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
-                      🚀
-                    </div>
+                  <td align="left" style="vertical-align: middle;">
+                    {logo_html}
                   </td>
-                  <td style="vertical-align: middle;">
-                    <span style="font-family: 'Playfair Display', Georgia, Cambria, 'Times New Roman', serif; font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; line-height: 1;">
-                      CoLaunch
+                  <td align="right" style="vertical-align: middle;">
+                    <span style="display: inline-block; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #c81e3c; background-color: #fef2f2; border: 1px solid #fecdd3; padding: 4px 10px; border-radius: 20px;">
+                      OPERATOR ONBOARDING
                     </span>
                   </td>
                 </tr>
               </table>
-              <div style="margin-top: 10px;">
-                <span style="display: inline-block; font-family: 'SF Mono', Menlo, Consolas, Courier, monospace; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #ffffff !important; background-color: #10b981; border: 1px solid #10b981; padding: 2px 8px; border-radius: 0px;">
-                  OPERATOR WORKSPACE READY
-                </span>
-              </div>
             </td>
           </tr>
 
-          <!-- Content Body (Tight & Compact) -->
+          <!-- Content Body -->
           <tr>
-            <td class="card-body" style="padding: 22px 24px 18px 24px;">
-              <h2 style="margin: 0 0 8px 0; color: #ffffff; font-size: 18px; font-weight: 800; letter-spacing: -0.3px;">
-                Welcome to CoLaunch, {clean_user}.
-              </h2>
-              <p style="margin: 0 0 16px 0; color: #94a3b8; font-size: 13px; line-height: 1.5;">
-                Your secure creator console is fully provisioned. Step inside to blueprint, schedule, and orchestrate your autonomous content and product engines.
+            <td class="card-body" style="padding: 32px 32px 24px 32px;">
+              
+              <!-- Hero Greeting -->
+              <h1 style="margin: 0 0 10px 0; font-family: 'Playfair Display', Georgia, Cambria, serif; font-size: 26px; font-weight: 700; color: #0f172a; line-height: 1.25; letter-spacing: -0.5px;">
+                You're ready to build &amp; co-launch
+              </h1>
+              <p style="margin: 0 0 20px 0; font-size: 15px; color: #334155; line-height: 1.6;">
+                Hello <strong style="color: #0f172a;">{clean_user}</strong>, welcome to <strong>CoLaunch</strong>! Your private creator software console is fully provisioned. We partner 50/50 with you to turn your audience attention into a defensible, high-margin software enterprise.
               </p>
 
-              <!-- Feature Highlights (Compact Cards) -->
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 18px;">
+              <!-- Primary Action CTA Button (Tactile & High-Converting) -->
+              <table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin: 22px 0 26px 0;">
                 <tr>
-                  <td style="padding: 10px 12px; background-color: #111624; border: 1px solid #1f2a3f; border-radius: 0px;">
-                    <strong style="color: #ffffff; font-size: 12px;">📅 Autonomous Content Calendar</strong>
-                    <p style="margin: 2px 0 0 0; font-size: 11px; color: #94a3b8; line-height: 1.4;">
-                      Generate 7-day strategically aligned multi-platform content drafts with explicit date/time scheduling.
-                    </p>
-                  </td>
-                </tr>
-                <tr><td style="height: 6px;"></td></tr>
-                <tr>
-                  <td style="padding: 10px 12px; background-color: #111624; border: 1px solid #1f2a3f; border-radius: 0px;">
-                    <strong style="color: #ffffff; font-size: 12px;">⚡ AI Video Performance Studio</strong>
-                    <p style="margin: 2px 0 0 0; font-size: 11px; color: #94a3b8; line-height: 1.4;">
-                      Self-improving AI diagnostics that analyze drop-offs and generate corrective prompts for your next video.
-                    </p>
-                  </td>
-                </tr>
-                <tr><td style="height: 6px;"></td></tr>
-                <tr>
-                  <td style="padding: 10px 12px; background-color: #111624; border: 1px solid #1f2a3f; border-radius: 0px;">
-                    <strong style="color: #ffffff; font-size: 12px;">🔒 Enterprise Privacy &amp; Auth</strong>
-                    <p style="margin: 2px 0 0 0; font-size: 11px; color: #94a3b8; line-height: 1.4;">
-                      Your social channel tokens, API keys, and audience signals are secured on MongoDB Atlas.
-                    </p>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- Action Button (Tighter Button, White Color on Dark Red BG) -->
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td align="center">
-                    <a href="{canonical_base}/dashboard" target="_blank" style="display: inline-block; background-color: #c81e3c; color: #ffffff !important; font-weight: 700; font-size: 12px; text-decoration: none; padding: 11px 28px; border-radius: 0px; letter-spacing: 0.2px; text-transform: uppercase;">
-                      Launch Your CoLaunch Console →
+                  <td align="left">
+                    <a href="{canonical_base}/dashboard" target="_blank" style="display: inline-block; background-color: #c81e3c; color: #ffffff !important; font-weight: 700; font-size: 13px; text-decoration: none; padding: 13px 28px; border-radius: 8px; letter-spacing: 0.3px; text-transform: uppercase; box-shadow: 0 4px 14px rgba(200, 30, 60, 0.28);">
+                      Launch Operator Console &rarr;
                     </a>
                   </td>
                 </tr>
               </table>
+
+              <!-- Section Divider -->
+              <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 26px 0;" />
+
+              <!-- Three Hints On Getting Started (Headway-Inspired Pattern with Clean SVG Icons) -->
+              <div style="font-size: 16px; font-weight: 800; color: #0f172a; margin-bottom: 16px; letter-spacing: -0.2px;">
+                Three hints on how to use CoLaunch:
+              </div>
+
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 24px;">
+                <!-- Hint 1: Calendar -->
+                <tr>
+                  <td style="vertical-align: top; width: 44px; padding-right: 12px; padding-bottom: 16px;">
+                    <div style="width: 38px; height: 38px; border-radius: 8px; background-color: #fef2f2; border: 1px solid #fecdd3; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 38px;">
+                      <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center" style="margin: 0 auto;">
+                        <tr><td style="padding: 10px 0 0 10px;">{calendar_svg}</td></tr>
+                      </table>
+                    </div>
+                  </td>
+                  <td style="vertical-align: top; padding-bottom: 16px;">
+                    <div class="hint-title" style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 3px;">
+                      Autonomous Content Calendar
+                    </div>
+                    <div style="font-size: 13px; color: #64748b; line-height: 1.5;">
+                      Plan, schedule, and orchestrate omnichannel video and social releases across YouTube, Instagram, and TikTok from a unified schedule.
+                    </div>
+                  </td>
+                </tr>
+
+                <!-- Hint 2: AI Video Studio -->
+                <tr>
+                  <td style="vertical-align: top; width: 44px; padding-right: 12px; padding-bottom: 16px;">
+                    <div style="width: 38px; height: 38px; border-radius: 8px; background-color: #fef2f2; border: 1px solid #fecdd3; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 38px;">
+                      <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center" style="margin: 0 auto;">
+                        <tr><td style="padding: 10px 0 0 10px;">{video_svg}</td></tr>
+                      </table>
+                    </div>
+                  </td>
+                  <td style="vertical-align: top; padding-bottom: 16px;">
+                    <div class="hint-title" style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 3px;">
+                      AI Video Performance Studio
+                    </div>
+                    <div style="font-size: 13px; color: #64748b; line-height: 1.5;">
+                      Continuous self-improving AI diagnostics that uncover retention drop-offs and generate corrective hooks for your upcoming video releases.
+                    </div>
+                  </td>
+                </tr>
+
+                <!-- Hint 3: Co-Founder Monetization -->
+                <tr>
+                  <td style="vertical-align: top; width: 44px; padding-right: 12px;">
+                    <div style="width: 38px; height: 38px; border-radius: 8px; background-color: #fef2f2; border: 1px solid #fecdd3; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 38px;">
+                      <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center" style="margin: 0 auto;">
+                        <tr><td style="padding: 10px 0 0 10px;">{rocket_svg}</td></tr>
+                      </table>
+                    </div>
+                  </td>
+                  <td style="vertical-align: top;">
+                    <div class="hint-title" style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 3px;">
+                      50/50 Co-Founder Monetization
+                    </div>
+                    <div style="font-size: 13px; color: #64748b; line-height: 1.5;">
+                      Review your audience software concepts. Our venture studio handles 100% of engineering, design, and hosting at zero upfront cost to you.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Workspace Credentials Box (Just Eat-Inspired Pattern) -->
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 24px 0;">
+                <tr>
+                  <td style="background-color: #f8fafc; border: 1.5px dashed #cbd5e1; border-radius: 8px; padding: 18px 20px;">
+                    <div style="font-size: 12px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 12px;">
+                      Workspace Access Details
+                    </div>
+                    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="font-size: 13px;">
+                      <tr>
+                        <td style="color: #64748b; padding-bottom: 6px; width: 140px;">Authorized User:</td>
+                        <td style="color: #0f172a; font-weight: 700; font-family: 'SF Mono', Menlo, Consolas, monospace; padding-bottom: 6px;">{clean_user}</td>
+                      </tr>
+                      <tr>
+                        <td style="color: #64748b; padding-bottom: 6px;">Dedicated URL:</td>
+                        <td style="padding-bottom: 6px;">
+                          <a href="{canonical_base}/dashboard" target="_blank" style="color: #c81e3c; font-weight: 700; text-decoration: underline;">
+                            {canonical_base.replace('https://', '')}/dashboard
+                          </a>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="color: #64748b; padding-bottom: 6px;">Access Tier:</td>
+                        <td style="color: #0f172a; font-weight: 600; padding-bottom: 6px;">Co-Founder Partner • Full Studio Access</td>
+                      </tr>
+                      <tr>
+                        <td style="color: #64748b;">Pipeline Status:</td>
+                        <td style="color: #059669; font-weight: 700;">
+                          <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #10b981; margin-right: 6px; vertical-align: middle;"></span>Active &amp; Provisioned
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Direct 2-Way Human Reply Protocol (SOLVES "email looks like a newsletter") -->
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 24px 0 16px 0;">
+                <tr>
+                  <td style="background-color: #fef2f2; border: 1px solid #fecdd3; border-left: 3px solid #c81e3c; border-radius: 4px 8px 8px 4px; padding: 16px 18px;">
+                    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="vertical-align: top; width: 28px; padding-right: 12px; padding-top: 2px;">
+                          {reply_svg}
+                        </td>
+                        <td style="vertical-align: top;">
+                          <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">
+                            Have questions or want to discuss ideas?
+                          </div>
+                          <p style="margin: 0 0 8px 0; font-size: 13px; color: #475569; line-height: 1.5;">
+                            Simply hit <strong>Reply</strong> to this email. You won't get routed to an automated ticketing bot — our venture partners and lead engineers read and answer every message directly.
+                          </p>
+                          <div style="font-size: 12px; color: #64748b; line-height: 1.5;">
+                            Reply with <span style="color: #c81e3c; font-weight: 700;">"I'm ready to review concepts"</span> or ask us any questions about the 50/50 partnership.
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Executive Signoff -->
+              <p style="margin: 24px 0 4px 0; font-size: 14px; color: #334155;">
+                We wish you a rapid journey to scale and recurring revenue,
+              </p>
+              <div style="font-size: 15px; font-weight: 700; color: #0f172a;">
+                The CoLaunch Venture Studio Team
+              </div>
+              <div style="font-size: 12px; color: #64748b; margin-top: 2px;">
+                Venture Partnerships &bull; <a href="{canonical_base}" style="color: #c81e3c; text-decoration: none;">colaunch.app</a>
+              </div>
+
             </td>
           </tr>
 
           <!-- Footer -->
           <tr>
-            <td style="padding: 16px 24px; border-top: 1px solid #161b2b; text-align: center; background-color: #080b12;">
-              <p style="margin: 0 0 4px 0; color: #64748b; font-size: 11px; font-weight: 600;">
-                CoLaunch • Turn your audience into a software business
+            <td style="padding: 20px 32px; border-top: 1px solid #f1f5f9; text-align: center; background-color: #f8fafc;">
+              <p style="margin: 0 0 4px 0; color: #64748b; font-size: 12px; font-weight: 600;">
+                CoLaunch • Turn your audience into a software enterprise
               </p>
-              <p style="margin: 0; color: #334155; font-size: 10px;">
-                <a href="{canonical_base}" style="color: #64748b; text-decoration: underline;">{canonical_base.replace('https://', '')}</a> • Dedicated Creator Workspace
+              <p style="margin: 0; color: #94a3b8; font-size: 11px;">
+                You received this onboarding dispatch because an operator workspace was created for {clean_user}.
               </p>
-              <p style="margin: 6px 0 0 0; color: #1e293b; font-size: 9px;">
-                © 2026 CoLaunch Technologies Inc. All rights reserved.
+              <p style="margin: 6px 0 0 0; color: #94a3b8; font-size: 10px;">
+                &copy; 2026 CoLaunch Technologies Inc. All rights reserved.
               </p>
             </td>
           </tr>

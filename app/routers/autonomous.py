@@ -38,7 +38,7 @@ class CampaignCreateSchema(BaseModel):
         "• Zero Risk: $0 Upfront Cost & Co-ownership\n"
         "• Hands-Off Ops: Global Hosting, Billing & 24/7 Support\n\n"
         "We analyzed your channel and engineered 3 tailored software product concepts for your {{follower_count}} followers "
-        "that could drive recurring monthly revenue 🚀\n\n"
+        "that could drive recurring monthly revenue.\n\n"
         "Would you be open to taking a look at a brief 3-concept breakdown this week?\n\n"
         "To reply, simply shoot back a quick response:\n"
         "• \"I'm interested, let's go ahead with the process\" — and I'll send over the 3 custom software concepts and revenue roadmap.\n"
@@ -53,7 +53,7 @@ class CampaignCreateSchema(BaseModel):
         "Following up on my note last week regarding the {{product_name}} co-founder partnership.\n\n"
         "Totally understand if your inbox is slammed! If you're open to exploring a custom digital product for your "
         "{{follower_count}} followers, let me know if Thursday or Friday works for a brief chat.\n\n"
-        "Best,\nCreator Forge Team"
+        "Best,\nCoLaunch Venture Studio Team"
     )
     followup_delay_days: int = 7
     status: str = "active"
