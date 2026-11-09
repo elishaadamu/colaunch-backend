@@ -603,16 +603,22 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         )
 
     reply_pattern = re.compile(
-        r'<p>To reply, simply respond directly to this email:<\/p>\s*<ul>\s*<li[^>]*>(?:•\s*)?(?:&quot;|\")I am interested.*?<\/li>\s*<li[^>]*>(?:•\s*)?(?:Or\s+)?(?:&quot;|\")Not interested.*?<\/li>\s*<\/ul>',
+        r'<p[^>]*>To reply, simply respond directly to this email:<\/p>\s*<ul[^>]*>\s*<li[^>]*>(?:•|\*|\-)?\s*(?:&quot;|\"|&ldquo;)?I am interested.*?<\/li>\s*<li[^>]*>(?:•|\*|\-)?\s*(?:Or\s+)?(?:&quot;|\"|&ldquo;)?Not interested.*?<\/li>\s*<\/ul>',
         re.IGNORECASE | re.DOTALL
     )
     raw_html = reply_pattern.sub(_style_reply_options, raw_html)
 
     reply_pattern_p = re.compile(
-        r'<p>To reply, simply respond directly to this email:<br\s*\/?>\s*(?:•\s*)?(?:&quot;|\")I am interested.*?<br\s*\/?>\s*(?:•\s*)?(?:Or\s+)?(?:&quot;|\")Not interested.*?<\/p>',
+        r'<p[^>]*>To reply, simply respond directly to this email:<br\s*\/?>\s*(?:•|\*|\-)?\s*(?:&quot;|\"|&ldquo;)?I am interested.*?<br\s*\/?>\s*(?:•|\*|\-)?\s*(?:Or\s+)?(?:&quot;|\"|&ldquo;)?Not interested.*?<\/p>',
         re.IGNORECASE | re.DOTALL
     )
     raw_html = reply_pattern_p.sub(_style_reply_options, raw_html)
+
+    reply_pattern_two_p = re.compile(
+        r'<p[^>]*>To reply, simply respond directly to this email:<\/p>\s*<p[^>]*>(?:•|\*|\-)?\s*(?:&quot;|\"|&ldquo;)?I am interested.*?<br\s*\/?>\s*(?:•|\*|\-)?\s*(?:Or\s+)?(?:&quot;|\"|&ldquo;)?Not interested.*?<\/p>',
+        re.IGNORECASE | re.DOTALL
+    )
+    raw_html = reply_pattern_two_p.sub(_style_reply_options, raw_html)
 
     raw_html = re.sub(
         r'<code>(.*?)</code>',
