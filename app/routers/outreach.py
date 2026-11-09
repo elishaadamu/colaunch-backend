@@ -459,12 +459,10 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
             else:
                 subject_to_send = f"{subject_to_send} [CF:{c_id[:8]}]"
 
-        # Embed reference footer in body if not already present
-        if "Ref:" not in body_text and "CF-CID" not in body_text:
-            body_text = f"{payload.body}\n\n---\nRef: {tracking_token}"
-
-        # Clean any accidental "undefined content" in body_text
+        # Clean any accidental "undefined content" or visible Ref tracking strings in body_text
         import re
+        body_text = re.sub(r'(?:---\s*)?Ref:\s*\[[^\]]+\]', '', body_text, flags=re.IGNORECASE).strip()
+        body_text = re.sub(r'---\s*$', '', body_text).strip()
         body_text = re.sub(r'\bundefined\s+content\b', 'content', body_text, flags=re.IGNORECASE)
         body_text = re.sub(r'\bundefined\b', 'channel', body_text, flags=re.IGNORECASE)
 

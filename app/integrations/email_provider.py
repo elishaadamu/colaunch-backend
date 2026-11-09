@@ -137,13 +137,31 @@ class EmailProvider:
             smtp_user = settings.GOOGLE_EMAIL.strip()
             smtp_password = settings.GOOGLE_APP_PASSWORD.replace(" ", "").strip()
 
-            msg = MIMEMultipart("alternative")
+            import os
+            from email.mime.image import MIMEImage
+
+            msg = MIMEMultipart("related")
             msg["Subject"] = subject
             msg["From"] = f"{display_name} <{smtp_user}>"
             msg["Reply-To"] = reply_email
             msg["To"] = to_email
-            msg.attach(MIMEText(body_text, "plain"))
-            msg.attach(MIMEText(body_html, "html"))
+
+            msg_alt = MIMEMultipart("alternative")
+            msg.attach(msg_alt)
+            msg_alt.attach(MIMEText(body_text, "plain"))
+            msg_alt.attach(MIMEText(body_html, "html"))
+
+            # Inline CoLaunch Logo attachment for 100% reliable image display in Gmail & Outlook
+            logo_path = os.path.join(os.path.dirname(__file__), "..", "assets", "colaunch_logo.png")
+            if os.path.exists(logo_path):
+                try:
+                    with open(logo_path, "rb") as f_img:
+                        img_part = MIMEImage(f_img.read(), name="colaunch_logo.png")
+                        img_part.add_header("Content-ID", "<colaunch_logo>")
+                        img_part.add_header("Content-Disposition", "inline", filename="colaunch_logo.png")
+                        msg.attach(img_part)
+                except Exception as img_err:
+                    logger.warning(f"[EmailProvider] Failed to attach inline logo: {img_err}")
 
             # Port 465 SSL via IPv4
             try:

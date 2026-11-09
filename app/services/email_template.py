@@ -39,39 +39,33 @@ def _get_backend_base() -> str:
     ).rstrip("/")
 
 
-def _render_colaunch_logo_html(size: int = 30, show_wordmark: bool = True) -> str:
+def _render_colaunch_logo_html(size: int = 32, show_wordmark: bool = True, is_dark: bool = False) -> str:
     """
-    Renders the official CoLaunch Rocket symbol & typography using inline SVG and table layout.
-    100% email client compatible — zero external image dependency, zero SVG blocking.
+    Renders the official CoLaunch Rocket symbol & typography.
+    Uses CID inline attachment and hosted fallback image so Gmail, Apple Mail & Outlook render it 100% reliably.
     """
+    text_color = "#ffffff" if is_dark else "#0f172a"
     wordmark_html = ""
     if show_wordmark:
-        font_sz = max(17, int(size * 0.72))
+        font_sz = max(18, int(size * 0.72))
         wordmark_html = (
             f'<td style="vertical-align:middle;padding-left:10px;">'
             f'<span style="font-family:\'Playfair Display\',Georgia,Cambria,\'Times New Roman\',serif;'
-            f'font-size:{font_sz}px;font-weight:700;color:#0f172a;letter-spacing:-0.5px;line-height:1;">'
+            f'font-size:{font_sz}px;font-weight:700;color:{text_color};letter-spacing:-0.5px;line-height:1;">'
             f'CoLaunch</span></td>'
         )
 
-    # CoLaunch Rocket Disc Badge SVG (Crisp circular badge with Crimson rocket artwork)
-    rocket_svg = (
-        f'<svg width="{size}" height="{size}" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;vertical-align:middle;">'
-        f'<circle cx="50" cy="50" r="48" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>'
-        f'<g transform="translate(19.5, 19.5) scale(1.7)">'
-        f'<path fill="#c81e3c" d="M1 17l8-7 16 1 1 16-7 8s.001-5.999-6-12-12-6-12-6z"/>'
-        f'<path fill="#ffac33" d="M.973 35s-.036-7.979 2.985-11S15 21.187 15 21.187 14.999 29 11.999 32c-3 3-11.026 3-11.026 3z"/>'
-        f'<circle fill="#ffcc4d" cx="8.999" cy="27" r="4"/>'
-        f'<path fill="#55acee" d="M35.999 0s-10 0-22 10c-6 5-6 14-4 16s11 2 16-4c10-12 10-22 10-22z"/>'
-        f'<path fill="#292f33" d="M26.999 5c-1.623 0-3.013.971-3.641 2.36.502-.227 1.055-.36 1.641-.36 2.209 0 4 1.791 4 4 0 .586-.133 1.139-.359 1.64 1.389-.627 2.359-2.017 2.359-3.64 0-2.209-1.791-4-4-4z"/>'
-        f'<path fill="#c81e3c" d="M8 28s0-4 1-5 13.001-10.999 14-10-9.001 13-10.001 14S8 28 8 28z"/>'
-        f'</g></svg>'
+    # Bulletproof logo img tag: inline CID attachment + public fallback
+    logo_img = (
+        f'<img src="cid:colaunch_logo" alt="CoLaunch" height="{size}" '
+        f'style="height:{size}px;max-height:{size}px;width:auto;display:block;border:0;outline:none;" '
+        f'onerror="this.onerror=null;this.src=\'https://app.co-launch.app/images/colaunch_logo.png\';" />'
     )
 
     return (
         f'<table border="0" cellspacing="0" cellpadding="0" style="display:inline-table;vertical-align:middle;">'
         f'<tr>'
-        f'<td style="vertical-align:middle;">{rocket_svg}</td>'
+        f'<td style="vertical-align:middle;">{logo_img}</td>'
         f'{wordmark_html}'
         f'</tr></table>'
     )
@@ -177,9 +171,10 @@ def _render_executive_signature_html(creator_name: str = "", tracking_token: str
     contact_email = get_contact_reply_email()
     ref_footnote = ""
     if tracking_token:
+        # Invisible tracking token: 100% effective for IMAP reply attribution, completely hidden from humans
         ref_footnote = (
-            '<div style="margin-top:10px;font-size:11px;color:#94a3b8;'
-            'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">'
+            f'<!-- Ref: {html.escape(tracking_token)} -->'
+            f'<div style="display:none!important;visibility:hidden;mso-hide:all;font-size:1px;color:#ffffff;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;">'
             f'Ref: {html.escape(tracking_token)}</div>'
         )
     return (
@@ -588,6 +583,37 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         flags=re.IGNORECASE
     )
 
+    # Format low-friction reply options into high-contrast visual badges
+    def _style_reply_options(match):
+        return (
+            '<div style="margin:22px 0 16px 0;background:#fef2f2;border:1px solid #fecdd3;border-left:3px solid #c81e3c;border-radius:8px;padding:16px 18px;">'
+            '<div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:10px;">'
+            'To reply, simply respond directly to this email:</div>'
+            '<div style="margin-bottom:8px;">'
+            '<span style="display:inline-block;padding:5px 12px;background:#059669;color:#ffffff;border-radius:4px;font-weight:700;font-size:12px;margin-right:6px;">'
+            '&ldquo;I am interested, let&#39;s proceed&rdquo;</span>'
+            '<span style="font-size:13px;color:#334155;line-height:1.5;">&rarr; We will send over the 3 custom software blueprints, revenue models, and live previews.</span>'
+            '</div>'
+            '<div>'
+            '<span style="display:inline-block;padding:5px 12px;background:#64748b;color:#ffffff;border-radius:4px;font-weight:700;font-size:12px;margin-right:6px;">'
+            '&ldquo;Not interested&rdquo;</span>'
+            '<span style="font-size:13px;color:#334155;line-height:1.5;">&rarr; We will immediately close your file with zero follow-ups.</span>'
+            '</div>'
+            '</div>'
+        )
+
+    reply_pattern = re.compile(
+        r'<p>To reply, simply respond directly to this email:<\/p>\s*<ul>\s*<li[^>]*>(?:•\s*)?(?:&quot;|\")I am interested.*?<\/li>\s*<li[^>]*>(?:•\s*)?(?:Or\s+)?(?:&quot;|\")Not interested.*?<\/li>\s*<\/ul>',
+        re.IGNORECASE | re.DOTALL
+    )
+    raw_html = reply_pattern.sub(_style_reply_options, raw_html)
+
+    reply_pattern_p = re.compile(
+        r'<p>To reply, simply respond directly to this email:<br\s*\/?>\s*(?:•\s*)?(?:&quot;|\")I am interested.*?<br\s*\/?>\s*(?:•\s*)?(?:Or\s+)?(?:&quot;|\")Not interested.*?<\/p>',
+        re.IGNORECASE | re.DOTALL
+    )
+    raw_html = reply_pattern_p.sub(_style_reply_options, raw_html)
+
     raw_html = re.sub(
         r'<code>(.*?)</code>',
         r'<code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;'
@@ -664,31 +690,89 @@ def format_luxury_html_email(
     signature_html = _render_executive_signature_html(creator_name, active_token)
 
     esc_subject = html.escape(subject)
-    return (
-        f'<!DOCTYPE html><html lang="en"><head>'
-        f'<meta charset="utf-8">'
-        f'<meta name="viewport" content="width=device-width, initial-scale=1.0">'
-        f'<title>{esc_subject}</title>'
-        f'<style>'
-        f'body{{margin:0!important;padding:0!important;background-color:#ffffff!important;'
-        f'color:#1e293b!important;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif!important;'
-        f'font-size:15px!important;line-height:1.65!important;-webkit-font-smoothing:antialiased;}}'
-        f'p{{margin:0 0 16px 0;color:#1e293b;font-size:15px;line-height:1.65;}}'
-        f'a{{color:#0284c7;}}'
-        f'@media only screen and (max-width:640px){{'
-        f'.email-wrapper{{padding:16px 12px!important;}}'
-        f'}}'
-        f'</style>'
-        f'</head>'
-        f'<body style="margin:0;padding:0;background-color:#ffffff;color:#1e293b;'
-        f'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;'
-        f'font-size:15px;line-height:1.65;">'
-        f'<div class="email-wrapper" style="max-width:620px;margin:0 auto;padding:28px 24px;background-color:#ffffff;">'
-        f'<div style="color:#1e293b;font-size:15px;line-height:1.65;">{formatted_body_html}</div>'
-        f'{concept_card_html}'
-        f'{signature_html}'
-        f'</div></body></html>'
-    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{esc_subject}</title>
+  <style>
+    body {{ margin: 0 !important; padding: 0 !important; background-color: #f1f5f9 !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; font-size: 15px !important; line-height: 1.65 !important; -webkit-font-smoothing: antialiased; }}
+    table {{ border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
+    td {{ padding: 0; }}
+    p {{ margin: 0 0 16px 0; color: #1e293b; font-size: 15px; line-height: 1.65; }}
+    a {{ color: #c81e3c; }}
+    @media only screen and (max-width: 620px) {{
+      .email-canvas {{ padding: 16px 8px !important; }}
+      .card-body {{ padding: 22px 18px !important; }}
+      .header-cell {{ padding: 14px 18px !important; }}
+    }}
+  </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; color: #1e293b; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" class="email-canvas" style="background-color: #f1f5f9; min-height: 100vh; padding: 32px 12px;">
+    <tr>
+      <td align="center">
+        
+        <!-- Main Card Container -->
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 24px rgba(15, 23, 42, 0.05); overflow: hidden;">
+          
+          <!-- Obsidian Brand Header Bar with CoLaunch Logo -->
+          <tr>
+            <td class="header-cell" style="padding: 18px 28px; background-color: #0b0f19; border-bottom: 2px solid #c81e3c;">
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td align="left" style="vertical-align: middle;">
+                    <table role="presentation" border="0" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="vertical-align: middle;">
+                          <img src="cid:colaunch_logo" alt="CoLaunch" height="34" style="height: 34px; max-height: 34px; width: auto; display: block; border: 0;" onerror="this.onerror=null;this.src='https://app.co-launch.app/images/colaunch_logo.png';" />
+                        </td>
+                        <td style="vertical-align: middle; padding-left: 10px;">
+                          <span style="font-family: 'Playfair Display', Georgia, Cambria, 'Times New Roman', serif; font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; line-height: 1;">
+                            CoLaunch
+                          </span>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td align="right" style="vertical-align: middle;">
+                    <span style="display: inline-block; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #c81e3c; background-color: #1a0f14; border: 1px solid #7f1d2d; padding: 4px 10px; border-radius: 20px;">
+                      VENTURE PARTNERSHIP
+                    </span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Content Body -->
+          <tr>
+            <td class="card-body" style="padding: 32px 32px 24px 32px; background-color: #ffffff;">
+              <div style="color: #1e293b; font-size: 15px; line-height: 1.65;">
+                {formatted_body_html}
+              </div>
+              {concept_card_html}
+              {signature_html}
+            </td>
+          </tr>
+
+          <!-- Subtle Footer Note -->
+          <tr>
+            <td style="padding: 16px 28px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center;">
+              <p style="margin: 0; color: #94a3b8; font-size: 11px;">
+                CoLaunch Venture Studio &bull; 50/50 Co-Founder Partnerships &bull; <a href="https://colaunch.app" style="color: #64748b; text-decoration: underline;">colaunch.app</a>
+              </p>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
 
 
 def render_otp_verification_email(
