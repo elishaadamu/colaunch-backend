@@ -198,6 +198,23 @@ class EmailProvider:
                     "htmlContent": body_html,
                     "textContent": body_text,
                 }
+
+                # Inline CoLaunch Logo attachment for 100% reliable image display
+                logo_path = os.path.join(os.path.dirname(__file__), "..", "assets", "colaunch_logo.png")
+                if os.path.exists(logo_path):
+                    try:
+                        import base64
+                        with open(logo_path, "rb") as f_img:
+                            b64_data = base64.b64encode(f_img.read()).decode("utf-8")
+                            brevo_payload["attachment"] = [
+                                {
+                                    "content": b64_data,
+                                    "name": "colaunch_logo.png"
+                                }
+                            ]
+                    except Exception as b_err:
+                        logger.warning(f"[EmailProvider] Failed to attach inline logo for Brevo: {b_err}")
+
                 req = urllib.request.Request(
                     "https://api.brevo.com/v3/smtp/email",
                     data=json.dumps(brevo_payload).encode("utf-8"),
@@ -230,6 +247,23 @@ class EmailProvider:
                     "html": body_html,
                     "text": body_text,
                 }
+
+                # Inline CoLaunch Logo attachment for Resend
+                logo_path = os.path.join(os.path.dirname(__file__), "..", "assets", "colaunch_logo.png")
+                if os.path.exists(logo_path):
+                    try:
+                        import base64
+                        with open(logo_path, "rb") as f_img:
+                            b64_data = base64.b64encode(f_img.read()).decode("utf-8")
+                            resend_payload["attachments"] = [
+                                {
+                                    "content": b64_data,
+                                    "filename": "colaunch_logo.png"
+                                }
+                            ]
+                    except Exception as r_err:
+                        logger.warning(f"[EmailProvider] Failed to attach inline logo for Resend: {r_err}")
+
                 req = urllib.request.Request(
                     "https://api.resend.com/emails",
                     data=json.dumps(resend_payload).encode("utf-8"),

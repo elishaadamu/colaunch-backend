@@ -174,7 +174,7 @@ def _render_executive_signature_html(creator_name: str = "", tracking_token: str
         # Invisible tracking token: 100% effective for IMAP reply attribution, completely hidden from humans
         ref_footnote = (
             f'<!-- Ref: {html.escape(tracking_token)} -->'
-            f'<div style="display:none!important;visibility:hidden;mso-hide:all;font-size:1px;color:#ffffff;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;">'
+            f'<div style="display:none!important;visibility:hidden;mso-hide:all;font-size:0px;color:transparent;line-height:0px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;">'
             f'Ref: {html.escape(tracking_token)}</div>'
         )
     return (
@@ -583,22 +583,76 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         flags=re.IGNORECASE
     )
 
+    # Style Headway-inspired 3-point venture pillars if standard pitch text is present
+    def _style_venture_pillars(match):
+        return (
+            '<div style="margin:20px 0 24px 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:6px 18px;box-shadow:0 1px 3px rgba(0,0,0,0.03);">'
+            '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:10px 0;">'
+            '<tr>'
+            '<td style="width:42px;vertical-align:top;padding-top:2px;">'
+            '<div style="width:34px;height:34px;line-height:34px;background:#fef2f2;border:1px solid #fecdd3;border-radius:8px;text-align:center;font-weight:800;color:#c81e3c;font-size:13px;font-family:monospace;">$0</div>'
+            '</td>'
+            '<td style="vertical-align:top;padding-left:10px;">'
+            '<div style="font-size:14px;font-weight:700;color:#0f172a;line-height:1.3;">Zero Financial or Engineering Cost</div>'
+            '<div style="font-size:13px;color:#475569;line-height:1.5;margin-top:2px;">Our studio covers 100% of software engineering, UI/UX design, cloud hosting, and continuous technical support.</div>'
+            '</td>'
+            '</tr>'
+            '</table>'
+            '<div style="border-top:1px solid #edf2f7;margin:4px 0;"></div>'
+            '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:10px 0;">'
+            '<tr>'
+            '<td style="width:42px;vertical-align:top;padding-top:2px;">'
+            '<div style="width:34px;height:34px;line-height:34px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;text-align:center;font-weight:800;color:#2563eb;font-size:11px;font-family:monospace;">50/50</div>'
+            '</td>'
+            '<td style="vertical-align:top;padding-left:10px;">'
+            '<div style="font-size:14px;font-weight:700;color:#0f172a;line-height:1.3;">50/50 Co-Founder Partnership</div>'
+            '<div style="font-size:13px;color:#475569;line-height:1.5;margin-top:2px;">We build real, recurring monthly software apps ($9–$29/mo) and split all net platform profits 50/50.</div>'
+            '</td>'
+            '</tr>'
+            '</table>'
+            '<div style="border-top:1px solid #edf2f7;margin:4px 0;"></div>'
+            '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:10px 0;">'
+            '<tr>'
+            '<td style="width:42px;vertical-align:top;padding-top:2px;">'
+            '<div style="width:34px;height:34px;line-height:34px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;text-align:center;font-weight:800;color:#059669;font-size:12px;font-family:monospace;">3x</div>'
+            '</td>'
+            '<td style="vertical-align:top;padding-left:10px;">'
+            '<div style="font-size:14px;font-weight:700;color:#0f172a;line-height:1.3;">3 Custom Software Prototypes Ready</div>'
+            '<div style="font-size:13px;color:#475569;line-height:1.5;margin-top:2px;">Our team has architected 3 custom software product concepts designed specifically for your community.</div>'
+            '</td>'
+            '</tr>'
+            '</table>'
+            '</div>'
+        )
+
+    pillars_pattern = re.compile(
+        r'<p[^>]*>I head venture partnerships at CoLaunch\..*?recurring software revenue stream\.</p>',
+        re.IGNORECASE | re.DOTALL
+    )
+    raw_html = pillars_pattern.sub(_style_venture_pillars, raw_html)
+
     # Format low-friction reply options into high-contrast visual badges
     def _style_reply_options(match):
         return (
-            '<div style="margin:22px 0 16px 0;background:#fef2f2;border:1px solid #fecdd3;border-left:3px solid #c81e3c;border-radius:8px;padding:16px 18px;">'
-            '<div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:10px;">'
+            '<div style="margin:24px 0 20px 0;background:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid #c81e3c;border-radius:8px;padding:18px 20px;">'
+            '<div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:12px;letter-spacing:0.3px;text-transform:uppercase;">'
             'To reply, simply respond directly to this email:</div>'
-            '<div style="margin-bottom:8px;">'
-            '<span style="display:inline-block;padding:5px 12px;background:#059669;color:#ffffff;border-radius:4px;font-weight:700;font-size:12px;margin-right:6px;">'
+            '<table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin-bottom:10px;">'
+            '<tr><td style="vertical-align:top;padding-right:10px;">'
+            '<span style="display:inline-block;padding:6px 14px;background:#059669;color:#ffffff;border-radius:6px;font-weight:700;font-size:13px;white-space:nowrap;">'
             '&ldquo;I am interested, let&#39;s proceed&rdquo;</span>'
-            '<span style="font-size:13px;color:#334155;line-height:1.5;">&rarr; We will send over the 3 custom software blueprints, revenue models, and live previews.</span>'
-            '</div>'
-            '<div>'
-            '<span style="display:inline-block;padding:5px 12px;background:#64748b;color:#ffffff;border-radius:4px;font-weight:700;font-size:12px;margin-right:6px;">'
+            '</td>'
+            '<td style="vertical-align:middle;font-size:13px;color:#334155;line-height:1.5;">'
+            '&rarr; We will send over the concepts, revenue roadmap, and live previews.'
+            '</td></tr></table>'
+            '<table role="presentation" border="0" cellspacing="0" cellpadding="0">'
+            '<tr><td style="vertical-align:top;padding-right:10px;">'
+            '<span style="display:inline-block;padding:6px 14px;background:#64748b;color:#ffffff;border-radius:6px;font-weight:700;font-size:13px;white-space:nowrap;">'
             '&ldquo;Not interested&rdquo;</span>'
-            '<span style="font-size:13px;color:#334155;line-height:1.5;">&rarr; We will immediately close your file with zero follow-ups.</span>'
-            '</div>'
+            '</td>'
+            '<td style="vertical-align:middle;font-size:13px;color:#334155;line-height:1.5;">'
+            '&rarr; We will immediately close your file with zero follow-ups.'
+            '</td></tr></table>'
             '</div>'
         )
 
