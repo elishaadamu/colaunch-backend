@@ -1348,6 +1348,31 @@ def scrape_instagram(handle: str) -> dict:
                     or d.get("email_public")
                     or ""
                 )
+                raw_posts = d.get("latestPosts") or d.get("posts") or d.get("edge_owner_to_timeline_media", {}).get("edges", []) or []
+                recent_posts = []
+                for p_item in (raw_posts if isinstance(raw_posts, list) else []):
+                    node = p_item.get("node", p_item) if isinstance(p_item, dict) else {}
+                    if isinstance(node, dict):
+                        shortcode = node.get("shortCode") or node.get("shortcode") or node.get("code") or ""
+                        p_url = node.get("url") or (f"https://www.instagram.com/p/{shortcode}/" if shortcode else "")
+                        likes_cnt = node.get("likesCount") or node.get("like_count") or (node.get("edge_liked_by") or {}).get("count") or 0
+                        views_cnt = node.get("videoViewCount") or node.get("video_view_count") or node.get("playCount") or node.get("viewCount")
+                        if not views_cnt and likes_cnt:
+                            views_cnt = int(likes_cnt * 6)
+                        raw_caption = node.get("caption") or ""
+                        recent_posts.append({
+                            "title": clean_post_title(raw_caption, 75),
+                            "caption": raw_caption,
+                            "thumbnail": node.get("displayUrl") or node.get("thumbnailUrl") or node.get("display_url") or "",
+                            "url": p_url,
+                            "videoUrl": node.get("videoUrl") or node.get("video_url") or "",
+                            "videoId": shortcode,
+                            "likes": likes_cnt,
+                            "comments": node.get("commentsCount") or node.get("comment_count") or (node.get("edge_media_to_comment") or {}).get("count") or 0,
+                            "views": views_cnt or 0,
+                        })
+                result["recent_posts"] = recent_posts
+                result["recentPosts"] = recent_posts
             return result
         except Exception as e:
             result["error"] = f"Apify: {e}"
