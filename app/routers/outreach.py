@@ -25,22 +25,26 @@ router = APIRouter(prefix="/api/outreach", tags=["outreach"])
 def render_dynamic_concept_card(
     name: str = "ActionLoop",
     app_url: str = "actionloop.app",
-    mrr: str = "$22.4K MRR",
-    active_users: str = "1,200",
-    retention: str = "91%",
-    customer: str = "Overwhelmed high-achiever/creators",
-    pricing: str = "$49/mo Starter / $99/mo Pro",
+    mrr: str = "",
+    active_users: str = "",
+    retention: str = "",
+    customer: str = "Creators & Operators",
+    pricing: str = "$49/mo Starter • $99/mo Pro",
     brand_color: Optional[str] = None,
-    mockup_type: str = "saas_os"
+    mockup_type: str = "saas_os",
+    tagline: Optional[str] = None,
+    features: Optional[str] = None,
 ):
     """
-    Renders dynamic concept text into an authentic macOS dark-mode concept card PNG.
-    Allows dynamic text from the AI or admin modifications to be converted into
-    a visual concept image and sent directly in emails with the creator's detected brand color.
+    Renders dynamic concept text into an authentic dark-mode concept card PNG
+    matching the ConceptLandingPage design and the creator's chosen brand color.
     """
+    feature_list = [f.strip() for f in (features or "").split("|") if f.strip()]
     concept_data = {
         "name": name,
         "appUrl": app_url,
+        "tagline": tagline or "",
+        "features": feature_list,
         "primaryMetric": mrr,
         "activeMetric": active_users,
         "efficiencyMetric": retention,

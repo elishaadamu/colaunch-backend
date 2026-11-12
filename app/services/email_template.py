@@ -52,7 +52,7 @@ F_HEAD = "'Cooper Black','Bookman Old Style',Rockwell,Georgia,'Times New Roman',
 F_BODY = "'Trebuchet MS','Gill Sans',Verdana,Helvetica,Arial,sans-serif"
 F_TYPE = "'Courier New',Courier,monospace"
 
-DEFAULT_LOGO_URL = "https://app.co-launch.app/images/colaunch_logo.png"
+DEFAULT_LOGO_URL = "https://app.co-launch.app/images/colaunch_badge.png"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -61,21 +61,49 @@ DEFAULT_LOGO_URL = "https://app.co-launch.app/images/colaunch_logo.png"
 def _get_frontend_base() -> str:
     return (
         os.getenv("FRONTEND_URL")
-        or getattr(settings, "FRONTEND_URL", "https://creator-forge-frontend.vercel.app")
+        or getattr(settings, "FRONTEND_URL", "https://app.co-launch.app")
     ).rstrip("/")
 
 
 def _get_backend_base() -> str:
     return (
         os.getenv("BACKEND_URL")
-        or getattr(settings, "BACKEND_URL", "http://localhost:8000")
+        or getattr(settings, "BACKEND_URL", "https://creator-forge-backend-jj1y.onrender.com")
     ).rstrip("/")
 
 
 def _logo_src() -> str:
     if (os.getenv("LOGO_USE_CID") or "").strip().lower() in ("1", "true", "yes"):
         return "cid:colaunch_logo"
-    return (os.getenv("LOGO_URL") or DEFAULT_LOGO_URL).strip()
+    override = (os.getenv("LOGO_URL") or "").strip()
+    if override:
+        return override
+    return f"{_get_frontend_base()}/images/colaunch_badge.png"
+
+
+def _sanitize_brand_hex(raw: Any, fallback: str = CRIMSON) -> str:
+    val = str(raw or "").strip()
+    m = re.match(r"^#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$", val)
+    if not m:
+        return fallback
+    h = m.group(1)
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return f"#{h.upper()}"
+
+
+def _contrast_ink(hex_color: str) -> str:
+    h = _sanitize_brand_hex(hex_color).lstrip("#")
+    r, g, b = (int(h[i:i+2], 16) / 255.0 for i in (0, 2, 4))
+    def lin(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    return INK if lum > 0.42 else WHITE
+
+
+def _concept_slug(name: str, index: int = 0) -> str:
+    slug = re.sub(r"[^a-z0-9\-]+", "-", (name or f"concept-{index + 1}").lower()).strip("-")
+    return slug or f"concept-{index + 1}"
 
 
 def get_contact_reply_email() -> str:
@@ -98,19 +126,17 @@ def get_contact_reply_email() -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 # Building blocks
 # ──────────────────────────────────────────────────────────────────────────────
-def _render_colaunch_logo_html(size: int = 32, show_wordmark: bool = True, is_dark: bool = False) -> str:
+def _render_colaunch_logo_html(size: int = 36, show_wordmark: bool = True, is_dark: bool = False) -> str:
     """
-    Round paper badge holding the logo, plus serif wordmark.
-    The badge keeps the logo legible on both dark and light backgrounds.
+    Circular CoLaunch rocket badge PNG plus clean serif wordmark.
+    Uses a square circle-cropped badge image with zero outer table borders so
+    clients that strip border-radius on <td> cannot draw a square box around it.
     """
-    pad = max(3, int(size * 0.14))
-    badge = size + pad * 2
     text_color = PAPER if is_dark else INK
-    border = MUSTARD if is_dark else INK
 
     wordmark = ""
     if show_wordmark:
-        font_sz = max(18, int(size * 0.78))
+        font_sz = max(20, int(size * 0.72))
         wordmark = (
             f'<td style="vertical-align:middle;padding-left:10px;">'
             f'<span style="font-family:{F_HEAD};font-size:{font_sz}px;font-weight:700;'
@@ -120,11 +146,10 @@ def _render_colaunch_logo_html(size: int = 32, show_wordmark: bool = True, is_da
     return (
         '<table role="presentation" border="0" cellspacing="0" cellpadding="0" '
         'style="display:inline-table;vertical-align:middle;"><tr>'
-        f'<td width="{badge}" height="{badge}" align="center" valign="middle" bgcolor="{PAPER}" '
-        f'style="width:{badge}px;height:{badge}px;background-color:{PAPER};border:2px solid {border};'
-        f'border-radius:50%;text-align:center;vertical-align:middle;">'
+        f'<td width="{size}" height="{size}" align="center" valign="middle" '
+        f'style="width:{size}px;height:{size}px;padding:0;text-align:center;vertical-align:middle;">'
         f'<img src="{html.escape(_logo_src())}" alt="CoLaunch" width="{size}" height="{size}" '
-        f'style="width:{size}px;height:{size}px;display:block;margin:0 auto;border:0;outline:none;" />'
+        f'style="width:{size}px;height:{size}px;display:block;margin:0;border:0;outline:none;border-radius:50%;" />'
         '</td>'
         f'{wordmark}'
         '</tr></table>'
@@ -224,7 +249,7 @@ _SHELL_CSS = """
     img { border:0; line-height:100%; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic; }
     a { color:#C81E3C; }
     @media only screen and (max-width:620px) {
-      .canvas { padding:14px 8px !important; }
+      .canvas { padding:18px 10px 24px 10px !important; }
       .px { padding-left:20px !important; padding-right:20px !important; }
       .hd { padding:16px 20px !important; }
       .h1 { font-size:28px !important; line-height:1.15 !important; }
@@ -253,7 +278,7 @@ def _email_shell(
         f'<tr><td class="hd" bgcolor="{INK}" style="background-color:{INK};padding:18px 28px;'
         f'border-bottom:3px solid {MUSTARD};">'
         '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0"><tr>'
-        f'<td class="stack" align="left" valign="middle">{_render_colaunch_logo_html(34, True, True)}</td>'
+        f'<td class="stack" align="left" valign="middle">{_render_colaunch_logo_html(38, True, True)}</td>'
         f'<td class="tag-cell" align="right" valign="middle">{_tag(html.escape(tag_label))}</td>'
         '</tr></table></td></tr>'
     )
@@ -270,8 +295,8 @@ def _email_shell(
 </head>
 <body style="margin:0;padding:0;background-color:{INK};font-family:{F_BODY};color:{BODY_TXT};">
   <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;mso-hide:all;">{esc_pre}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>
-  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" bgcolor="{INK}" class="canvas" style="background-color:{INK};padding:32px 12px;">
-    <tr><td align="center">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" bgcolor="{INK}" style="background-color:{INK};">
+    <tr><td align="center" bgcolor="{INK}" class="canvas" style="background-color:{INK};padding:36px 14px 40px 14px;">
       <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width:{max_width}px;background-color:{PAPER};border:3px solid {PAPER};border-radius:14px;overflow:hidden;">
         <tr><td>{_stripes()}</td></tr>
         {header}
@@ -305,7 +330,7 @@ def _standard_footer(extra_line: str = "") -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 def _render_executive_signature_html(creator_name: str = "", tracking_token: str = "") -> str:
     """Plain 1-on-1 signature on a dashed rule. Hidden Ref token kept for IMAP reply attribution."""
-    logo_html = _render_colaunch_logo_html(size=28, show_wordmark=False)
+    logo_html = _render_colaunch_logo_html(size=40, show_wordmark=False)
     contact_email = get_contact_reply_email()
     ref_footnote = ""
     if tracking_token:
@@ -371,6 +396,8 @@ def _build_concept_landing_url(concept: Dict[str, Any], creator_name: str = "", 
 
     if explicit_url and explicit_url.startswith("http"):
         return explicit_url
+    if explicit_url and explicit_url.startswith("/"):
+        return f"{frontend_base}{explicit_url}"
 
     app_url = (concept.get("appUrl") or mockup.get("appUrl") or "").strip()
 
@@ -379,9 +406,61 @@ def _build_concept_landing_url(concept: Dict[str, Any], creator_name: str = "", 
     if app_url and app_url.startswith("http"):
         return app_url
 
-    concept_slug = re.sub(r"[^a-z0-9\-]", "", (concept.get("name") or "concept").lower().replace(" ", "-"))
-    creator_slug = re.sub(r"[^a-z0-9\-]", "", (creator_name or "creator").lower().replace(" ", "-"))
-    return f"{frontend_base}/preorder/{creator_slug}?concept={concept_slug}"
+    c_slug = _concept_slug(str(concept.get("name") or concept.get("title") or ""), index)
+    creator_slug = re.sub(r"[^a-z0-9\-]", "", (creator_name or "creator").lower().replace(" ", "-")) or "creator"
+    return f"{frontend_base}/preorder/{creator_slug}?concept={c_slug}"
+
+
+def _build_concept_card_image_url(
+    concept: Dict[str, Any],
+    accent_hex: str,
+    features: List[str],
+) -> str:
+    """Build deterministic backend concept preview PNG URL with real features & branding."""
+    from urllib.parse import urlencode
+
+    mockup = concept.get("mockup") if isinstance(concept.get("mockup"), dict) else {}
+    raw_img = (
+        concept.get("customImageUrl")
+        or concept.get("imageUrl")
+        or concept.get("image_url")
+        or concept.get("mockup_url")
+        or mockup.get("imageUrl")
+        or mockup.get("previewUrl")
+        or ""
+    )
+    backend_base = _get_backend_base()
+    if "localhost" in backend_base or "127.0.0.1" in backend_base:
+        public_backend = os.getenv("PUBLIC_BACKEND_URL") or "https://creator-forge-backend-jj1y.onrender.com"
+    else:
+        public_backend = backend_base
+
+    if isinstance(raw_img, str) and raw_img.strip():
+        clean = raw_img.strip()
+        if clean.startswith("/api/"):
+            return f"{public_backend}{clean}"
+        if clean.startswith("/"):
+            return f"{_get_frontend_base()}{clean}"
+        if clean.startswith("http"):
+            # If frontend accidentally prefixed /api/outreach/concept-card-image with Vercel origin, rewrite to backend
+            if "/api/outreach/concept-card-image" in clean:
+                path_part = clean[clean.index("/api/outreach/concept-card-image"):]
+                return f"{public_backend}{path_part}"
+            return clean
+
+    app_name = str(concept.get("name") or concept.get("title") or "Software Concept").strip()
+    app_url = str(concept.get("appUrl") or mockup.get("appUrl") or f"{_concept_slug(app_name)}.app").strip()
+    params = {
+        "name": app_name,
+        "app_url": app_url,
+        "tagline": str(concept.get("tagline") or concept.get("summary") or "")[:90],
+        "features": "|".join(str(f).strip() for f in features[:4] if str(f).strip()),
+        "customer": str(concept.get("customer") or concept.get("demographicAlignment") or "Creator Community")[:60],
+        "pricing": str(concept.get("pricing") or "$29/mo Starter • $79/mo Pro")[:50],
+        "brand_color": accent_hex,
+        "mockup_type": str(concept.get("mockupType") or "saas_os"),
+    }
+    return f"{public_backend}/api/outreach/concept-card-image?{urlencode(params)}"
 
 
 def _render_single_concept_block(
@@ -391,43 +470,47 @@ def _render_single_concept_block(
     creator_name: str = "",
     tracking_token: str = ""
 ) -> str:
-    """One concept as a 'launch ticket': ink stub on top, perforation, details below."""
-    app_name = concept.get("name") or concept.get("title") or f"Software Concept {index + 1}"
-    tagline = concept.get("tagline") or concept.get("summary") or ""
-    problem = concept.get("problem") or concept.get("description") or ""
+    """Rich concept card styled around the concept's brand color and full product spec."""
+    from urllib.parse import quote
+
+    default_cycle = (CRIMSON, "#10B981", "#06B6D4")
+    accent_hex = _sanitize_brand_hex(
+        concept.get("brandColor") or concept.get("brand_color") or concept.get("accentColor"),
+        fallback=default_cycle[index % len(default_cycle)],
+    )
+    accent_ink = _contrast_ink(accent_hex)
+
+    app_name = str(concept.get("name") or concept.get("title") or f"Software Concept {index + 1}").strip()
+    tagline = str(concept.get("tagline") or concept.get("summary") or "").strip()
+    problem = str(concept.get("problem") or concept.get("description") or "").strip()
     score = concept.get("opportunityScore") or concept.get("score") or (98 - index * 3)
+    target_audience = str(concept.get("customer") or concept.get("demographicAlignment") or "").strip()
+    audience_evidence = str(concept.get("audienceEvidence") or "").strip()
+    mvp_difficulty = str(concept.get("mvpDifficulty") or "2 weeks to MVP").strip()
+    revenue_model = str(concept.get("revenueModel") or "50/50 Co-Founder Revenue Share").strip()
 
     raw_pricing = concept.get("pricing") or concept.get("revenueModel")
     if isinstance(raw_pricing, dict):
-        pricing_parts = [str(v) for k, v in raw_pricing.items() if v]
+        pricing_parts = [str(v) for v in raw_pricing.values() if v]
         pricing = " / ".join(pricing_parts) if pricing_parts else "$29/mo"
     elif isinstance(raw_pricing, str) and raw_pricing.strip():
         pricing = raw_pricing.strip()
     else:
-        pricing = "$29/mo Starter — $79/mo Pro"
+        pricing = "$29/mo Starter • $79/mo Pro"
 
-    key_features = concept.get("keyFeatures") or concept.get("features") or []
+    raw_features = concept.get("keyFeatures") or concept.get("features") or concept.get("coreFeatures") or []
+    key_features = [str(f).strip() for f in raw_features if str(f).strip()][:4] if isinstance(raw_features, list) else []
+
     landing_url = _build_concept_landing_url(concept, creator_name, index)
+    concept_img = _build_concept_card_image_url(concept, accent_hex, key_features)
 
-    mockup = concept.get("mockup") if isinstance(concept.get("mockup"), dict) else {}
-    concept_img = (
-        concept.get("customImageUrl")
-        or concept.get("imageUrl")
-        or concept.get("image_url")
-        or concept.get("mockup_url")
-        or mockup.get("imageUrl")
-        or mockup.get("previewUrl")
-        or ""
-    )
-    if isinstance(concept_img, str) and concept_img.strip():
-        concept_img = concept_img.strip()
-        if concept_img.startswith("/"):
-            concept_img = f"{_get_frontend_base()}{concept_img}"
-    else:
-        concept_img = ""
+    contact_email = get_contact_reply_email()
+    mailto_subj = quote(f"Interested in Concept {index + 1}: {app_name}")
+    mailto_body = quote(f"Hi CoLaunch team,\n\nI'd like to explore Concept {index + 1} ({app_name}) and review next steps.")
+    mailto_href = f"mailto:{contact_email}?subject={mailto_subj}&body={mailto_body}"
 
     tagline_html = (
-        f'<div style="font-family:{F_BODY};font-size:15px;color:{PAPER};margin-top:6px;line-height:1.45;">'
+        f'<div style="font-family:{F_BODY};font-size:15px;color:#CBD5E1;margin-top:6px;line-height:1.45;">'
         f'{html.escape(tagline)}</div>'
         if tagline else ""
     )
@@ -435,55 +518,99 @@ def _render_single_concept_block(
     img_html = ""
     if concept_img:
         img_html = (
-            '<div style="margin:0 0 16px 0;">'
+            '<div style="margin:0 0 18px 0;">'
+            f'<a href="{html.escape(landing_url, quote=True)}" target="_blank" style="text-decoration:none;display:block;">'
             f'<img src="{html.escape(concept_img)}" alt="{html.escape(app_name)} preview" width="520" '
-            f'style="width:100%;max-width:520px;height:auto;border-radius:8px;border:2px solid {INK};display:block;" />'
-            '</div>'
+            f'style="width:100%;max-width:520px;height:auto;border-radius:10px;border:2px solid {INK};display:block;" />'
+            '</a></div>'
         )
 
     problem_html = ""
     if problem:
         problem_html = (
-            f'<p style="margin:0 0 12px 0;color:{BODY_TXT};font-size:14px;line-height:1.6;">'
-            f'<strong style="color:{INK};">Problem it solves:</strong> {html.escape(problem)}</p>'
+            f'<div style="margin:0 0 14px 0;padding:12px 14px;background-color:{PAPER};border-left:4px solid {accent_hex};border-radius:6px;">'
+            f'<div style="font-family:{F_TYPE};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:{MUTED};margin-bottom:3px;">Problem it solves</div>'
+            f'<div style="color:{BODY_TXT};font-size:14px;line-height:1.55;">{html.escape(problem)}</div>'
+            '</div>'
         )
 
     features_html = ""
-    if key_features and isinstance(key_features, list):
+    if key_features:
         items = "".join(
-            f'<li style="margin:0 0 5px 0;color:{BODY_TXT};font-size:14px;line-height:1.55;">{html.escape(str(f))}</li>'
-            for f in key_features[:4]
+            '<tr>'
+            f'<td width="16" valign="top" style="width:16px;padding:3px 8px 6px 0;color:{accent_hex};font-weight:700;font-size:14px;line-height:1.4;">&#9679;</td>'
+            f'<td valign="top" style="padding:0 0 6px 0;color:{BODY_TXT};font-size:14px;line-height:1.5;">{html.escape(f)}</td>'
+            '</tr>'
+            for f in key_features
         )
-        features_html = f'<ul style="margin:0 0 14px 0;padding-left:20px;list-style-type:square;">{items}</ul>'
+        features_html = (
+            '<div style="margin:0 0 14px 0;">'
+            f'<div style="font-family:{F_TYPE};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:{MUTED};margin-bottom:6px;">What you get inside</div>'
+            f'<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">{items}</table>'
+            '</div>'
+        )
+
+    audience_html = ""
+    if target_audience or audience_evidence:
+        aud_rows = []
+        if target_audience:
+            aud_rows.append(
+                f'<div style="font-size:13px;color:{BODY_TXT};line-height:1.5;margin-bottom:4px;">'
+                f'<strong style="color:{INK};">Built for:</strong> {html.escape(target_audience)}</div>'
+            )
+        if audience_evidence:
+            aud_rows.append(
+                f'<div style="font-size:13px;color:{MUTED};line-height:1.5;">'
+                f'<strong style="color:{INK};">Audience signal:</strong> {html.escape(audience_evidence)}</div>'
+            )
+        audience_html = (
+            f'<div style="margin:0 0 14px 0;padding:10px 12px;background-color:#F8FAFC;border:1px solid {RULE};border-radius:8px;">'
+            + "".join(aud_rows)
+            + '</div>'
+        )
 
     stats = (
-        '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:4px 0 0 0;"><tr>'
-        f'<td class="stack" valign="top" style="padding-right:8px;">'
-        f'<div style="font-family:{F_TYPE};font-size:11px;color:{MUTED};">Pricing</div>'
-        f'<div style="font-size:14px;font-weight:700;color:{INK};margin-top:2px;">{html.escape(pricing)}</div></td>'
-        f'<td class="stack stack-gap" valign="top" align="right" style="text-align:right;">'
-        f'<div style="font-family:{F_TYPE};font-size:11px;color:{MUTED};">Opportunity score</div>'
-        f'<div style="font-family:{F_HEAD};font-size:22px;font-weight:700;color:{TEAL};margin-top:2px;">{score}/100</div></td>'
+        f'<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" '
+        f'style="margin:6px 0 0 0;background-color:{PAPER};border:1.5px solid {RULE};border-radius:8px;"><tr>'
+        f'<td class="stack" valign="top" style="padding:10px 12px;">'
+        f'<div style="font-family:{F_TYPE};font-size:10px;text-transform:uppercase;color:{MUTED};">Pricing</div>'
+        f'<div style="font-size:13px;font-weight:700;color:{INK};margin-top:3px;">{html.escape(pricing)}</div></td>'
+        f'<td class="stack stack-gap" valign="top" style="padding:10px 12px;">'
+        f'<div style="font-family:{F_TYPE};font-size:10px;text-transform:uppercase;color:{MUTED};">Timeline &amp; split</div>'
+        f'<div style="font-size:13px;font-weight:700;color:{INK};margin-top:3px;">{html.escape(mvp_difficulty)} &bull; 50/50 split</div></td>'
+        f'<td class="stack stack-gap" valign="top" align="right" style="padding:10px 12px;text-align:right;">'
+        f'<div style="font-family:{F_TYPE};font-size:10px;text-transform:uppercase;color:{MUTED};">Audience fit</div>'
+        f'<div style="font-family:{F_HEAD};font-size:19px;font-weight:700;color:{TEAL};margin-top:2px;">{score}/100</div></td>'
         '</tr></table>'
     )
 
     return (
         f'<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" '
         f'style="margin:0 0 26px 0;border:3px solid {INK};border-radius:12px;overflow:hidden;background-color:{WHITE};">'
-        # stub
-        f'<tr><td bgcolor="{INK}" style="background-color:{INK};padding:16px 20px;border-bottom:3px dashed {MUSTARD};">'
-        f'{_tag(f"Concept {index + 1} of {total_concepts}")}'
+        # top color strip
+        f'<tr><td height="6" bgcolor="{accent_hex}" style="height:6px;line-height:6px;font-size:0;background-color:{accent_hex};">&nbsp;</td></tr>'
+        # dark header matching ConceptLandingPage aesthetic
+        f'<tr><td bgcolor="#10131A" style="background-color:#10131A;padding:18px 20px;border-bottom:3px dashed {accent_hex};">'
+        '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0"><tr>'
+        f'<td align="left" valign="middle">{_tag(f"Concept {index + 1} of {total_concepts}", bg=accent_hex, color=accent_ink, border=accent_hex)}</td>'
+        f'<td align="right" valign="middle" style="font-family:{F_TYPE};font-size:11px;font-weight:700;color:#6FCF9B;">Fit {score}/100</td>'
+        '</tr></table>'
         f'<div style="font-family:{F_HEAD};font-size:24px;font-weight:700;color:{WHITE};margin-top:10px;line-height:1.2;">'
         f'{html.escape(app_name)}</div>'
         f'{tagline_html}'
         '</td></tr>'
         # body
         f'<tr><td style="padding:18px 20px 20px 20px;background-color:{WHITE};">'
-        f'{img_html}{problem_html}{features_html}{stats}'
+        f'{img_html}{problem_html}{features_html}{audience_html}{stats}'
         f'{_dash_rule(RULE, "16px 0 16px 0")}'
-        f'<div class="btn-full">{_button(landing_url, "Review live concept &amp; landing page")}</div>'
-        f'<div style="font-size:12px;color:{MUTED};margin-top:10px;word-break:break-all;line-height:1.5;">'
-        f'Direct link: <a href="{html.escape(landing_url, quote=True)}" target="_blank" '
+        '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0"><tr>'
+        f'<td class="stack btn-full" valign="middle">{_button(landing_url, "View live landing page &rarr;", bg=accent_hex, color=accent_ink)}</td>'
+        f'<td class="stack stack-gap" align="right" valign="middle" style="text-align:right;">'
+        f'<a href="{html.escape(mailto_href, quote=True)}" style="font-family:{F_BODY};font-size:13px;font-weight:700;color:{INK};text-decoration:underline;">'
+        f'Select Concept {index + 1} &rarr;</a></td>'
+        '</tr></table>'
+        f'<div style="font-size:12px;color:{MUTED};margin-top:12px;word-break:break-all;line-height:1.5;">'
+        f'Landing page: <a href="{html.escape(landing_url, quote=True)}" target="_blank" '
         f'style="color:{CRIMSON};text-decoration:underline;">{html.escape(landing_url)}</a></div>'
         '</td></tr></table>'
     )
@@ -493,9 +620,10 @@ def render_concept_showcase_html(
     concepts: Optional[List[Dict[str, Any]]] = None,
     concept_image_url: Optional[str] = None,
     creator_name: str = "",
-    tracking_token: str = ""
+    tracking_token: str = "",
+    include_closing_cta: bool = True,
 ) -> str:
-    """Concept section for Step 5 & 6: header, up to 3 concept tickets, closing note."""
+    """Concept section for Step 5 & 6: header, up to 3 concept tickets, optional closing note."""
     if not concepts and not concept_image_url:
         return ""
 
@@ -505,13 +633,13 @@ def render_concept_showcase_html(
     plural = "" if total_count == 1 else "s"
 
     header_html = (
-        f'<div style="margin:30px 0 18px 0;padding:14px 18px;background-color:{MUSTARD};'
+        f'<div style="margin:26px 0 18px 0;padding:14px 18px;background-color:{MUSTARD};'
         f'border:3px solid {INK};border-radius:10px;">'
         f'<div style="font-family:{F_HEAD};font-size:20px;font-weight:700;color:{INK};line-height:1.25;">'
         'Software Concepts Proposed for Your Audience</div>'
         f'<div style="font-size:13px;color:{INK};margin-top:5px;line-height:1.5;">'
-        f'Below are the top {total_count} custom software product concept{plural} our team has designed '
-        'based on analysis of your audience. Each includes a live landing page preview.</div>'
+        f'Below are the top {total_count} custom software concept{plural} designed for your community '
+        '— each includes full details and a live branded landing page to review.</div>'
         '</div>'
     )
 
@@ -520,13 +648,15 @@ def render_concept_showcase_html(
         for idx, c in enumerate(concept_list)
     )
 
-    cta_html = (
-        f'<div style="margin:20px 0 8px 0;font-size:14px;color:{BODY_TXT};line-height:1.65;">'
-        'Under our 50/50 partnership, our engineering team handles 100% of product development, '
-        'cloud hosting, billing infrastructure, and ongoing technical support with zero upfront cost to you.<br><br>'
-        'To discuss these concepts, refine any direction, or explore an idea of your own, simply reply directly to this email.'
-        '</div>'
-    )
+    cta_html = ""
+    if include_closing_cta:
+        cta_html = (
+            f'<div style="margin:20px 0 8px 0;font-size:14px;color:{BODY_TXT};line-height:1.65;">'
+            'Under our 50/50 partnership, our engineering team handles 100% of product development, '
+            'cloud hosting, billing infrastructure, and ongoing technical support with zero upfront cost to you.<br><br>'
+            'To discuss these concepts, refine any direction, or explore an idea of your own, simply reply directly to this email.'
+            '</div>'
+        )
 
     return header_html + cards_html + cta_html
 
@@ -788,7 +918,38 @@ def format_luxury_html_email(
     clean_body = re.sub(r'\bundefined\s+content\b', 'content', clean_body, flags=re.IGNORECASE)
     clean_body = re.sub(r'\bundefined\b', 'community', clean_body, flags=re.IGNORECASE)
 
-    formatted_body_html = convert_markdown_to_clean_html(clean_body)
+    active_concepts = concepts
+    if not active_concepts and (concept_title or concept_image_url):
+        active_concepts = [{
+            "name": concept_title or "Custom Creator SaaS",
+            "tagline": "Tailored software engineered for your audience",
+            "imageUrl": concept_image_url,
+            "mockup": {
+                "previewUrl": concept_image_url,
+                "appUrl": f"{creator_name.lower().replace(' ', '')}app.io" if creator_name else "creatorstudio.app"
+            },
+            "revenueModel": "$29/month Tiered Subscription",
+            "pricing": {"creatorSplit": "50% Net Co-Founder Share"},
+            "coreFeatures": ["Tailored Audience Workflow", "Automated Creator Monetisation"]
+        }]
+
+    has_explicit_concepts = bool(active_concepts and len(active_concepts) > 0)
+    inline_concept_pattern = re.compile(
+        r'(?:^|\n)(?:1\.\s+(?:\*\*|[A-Z])|#{1,3}\s*Concept\s*1\b)[\s\S]*?(?=\n(?:Under our 50/50|>\s*\*\*100%\s*Flexible|Let me know|Please review|Best regards)|\Z)',
+        re.IGNORECASE,
+    )
+    has_closing_copy = bool(
+        re.search(r'(?:Under our 50/50|100% Flexible|Let me know|Best regards)', clean_body, re.IGNORECASE)
+    )
+
+    slot_token = "[[COLAUNCH_CONCEPT_CARDS_SLOT]]"
+    slotted_in_body = False
+    body_for_html = clean_body
+    if has_explicit_concepts and inline_concept_pattern.search(clean_body):
+        body_for_html = inline_concept_pattern.sub(f"\n\n{slot_token}\n\n", clean_body, count=1)
+        slotted_in_body = slot_token in body_for_html
+
+    formatted_body_html = convert_markdown_to_clean_html(body_for_html)
 
     has_concepts_in_body = bool(
         re.search(
@@ -799,28 +960,23 @@ def format_luxury_html_email(
     )
 
     concept_card_html = ""
-    if not has_concepts_in_body:
-        active_concepts = concepts
-        if not active_concepts and (concept_title or concept_image_url):
-            active_concepts = [{
-                "name": concept_title or "Custom Creator SaaS",
-                "tagline": "Tailored software engineered for your audience",
-                "imageUrl": concept_image_url,
-                "mockup": {
-                    "previewUrl": concept_image_url,
-                    "appUrl": f"{creator_name.lower().replace(' ', '')}app.io" if creator_name else "creatorstudio.app"
-                },
-                "revenueModel": "$29/month Tiered Subscription",
-                "pricing": {"creatorSplit": "50% Net Co-Founder Share"},
-                "coreFeatures": ["Tailored Audience Workflow", "Automated Creator Monetisation"]
-            }]
-
+    if has_explicit_concepts or not has_concepts_in_body:
         concept_card_html = render_concept_showcase_html(
             concepts=active_concepts,
             concept_image_url=concept_image_url,
             creator_name=creator_name,
-            tracking_token=active_token
+            tracking_token=active_token,
+            include_closing_cta=not has_closing_copy,
         )
+
+    if slotted_in_body and concept_card_html:
+        formatted_body_html = re.sub(
+            rf'(?:<p[^>]*>\s*)?{re.escape(slot_token)}(?:\s*</p>)?',
+            lambda _m: concept_card_html,
+            formatted_body_html,
+            count=1,
+        )
+        concept_card_html = ""
 
     signature_html = _render_executive_signature_html(creator_name, active_token)
 

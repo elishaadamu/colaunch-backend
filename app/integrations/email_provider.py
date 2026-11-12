@@ -138,7 +138,52 @@ class EmailProvider:
             smtp_password = settings.GOOGLE_APP_PASSWORD.replace(" ", "").strip()
 
             import os
+            import re as _re
+            from urllib.parse import urlparse as _urlparse, parse_qs as _parse_qs
             from email.mime.image import MIMEImage
+
+            smtp_body_html = body_html
+            inline_concept_parts = []
+
+            # Rewrite hosted logo badge URLs to inline CID when logo file is attached below
+            logo_path = os.path.join(os.path.dirname(__file__), "..", "assets", "colaunch_logo.png")
+            has_inline_logo = os.path.exists(logo_path)
+            if has_inline_logo:
+                smtp_body_html = _re.sub(
+                    r'https?://[^"\'\s>]+/images/colaunch_(?:badge|logo)\.png',
+                    'cid:colaunch_logo',
+                    smtp_body_html,
+                )
+
+            # Inline-attach concept preview PNGs if pointing to localhost (unreachable from Gmail proxy)
+            concept_img_matches = list(
+                _re.finditer(r'(https?://(?:localhost|127\.0\.0\.1)[^"\'\s>]+/api/outreach/concept-card-image\?[^"\'\s>]+)', smtp_body_html)
+            )
+            if concept_img_matches:
+                try:
+                    from app.services.concept_image_generator import generate_concept_card_image
+                    for idx, m in enumerate(concept_img_matches[:3]):
+                        raw_url = m.group(1).replace("&amp;", "&")
+                        qs = _parse_qs(_urlparse(raw_url).query)
+                        c_data = {
+                            "name": qs.get("name", [f"Concept {idx + 1}"])[0],
+                            "appUrl": qs.get("app_url", [""])[0],
+                            "tagline": qs.get("tagline", [""])[0],
+                            "features": [f for f in qs.get("features", [""])[0].split("|") if f],
+                            "customer": qs.get("customer", [""])[0],
+                            "pricing": qs.get("pricing", [""])[0],
+                            "brandColor": qs.get("brand_color", [""])[0],
+                            "mockupType": qs.get("mockup_type", ["saas_os"])[0],
+                        }
+                        png_bytes = generate_concept_card_image(c_data)
+                        cid_name = f"concept_preview_{idx}"
+                        part = MIMEImage(png_bytes, name=f"{cid_name}.png")
+                        part.add_header("Content-ID", f"<{cid_name}>")
+                        part.add_header("Content-Disposition", "inline", filename=f"{cid_name}.png")
+                        inline_concept_parts.append(part)
+                        smtp_body_html = smtp_body_html.replace(m.group(1), f"cid:{cid_name}")
+                except Exception as c_img_err:
+                    logger.warning(f"[EmailProvider] Failed inline concept preview fallback: {c_img_err}")
 
             msg = MIMEMultipart("related")
             msg["Subject"] = subject
@@ -149,11 +194,10 @@ class EmailProvider:
             msg_alt = MIMEMultipart("alternative")
             msg.attach(msg_alt)
             msg_alt.attach(MIMEText(body_text, "plain"))
-            msg_alt.attach(MIMEText(body_html, "html"))
+            msg_alt.attach(MIMEText(smtp_body_html, "html"))
 
             # Inline CoLaunch Logo attachment for 100% reliable image display in Gmail & Outlook
-            logo_path = os.path.join(os.path.dirname(__file__), "..", "assets", "colaunch_logo.png")
-            if os.path.exists(logo_path):
+            if has_inline_logo:
                 try:
                     with open(logo_path, "rb") as f_img:
                         img_part = MIMEImage(f_img.read(), name="colaunch_logo.png")
@@ -162,6 +206,9 @@ class EmailProvider:
                         msg.attach(img_part)
                 except Exception as img_err:
                     logger.warning(f"[EmailProvider] Failed to attach inline logo: {img_err}")
+
+            for c_part in inline_concept_parts:
+                msg.attach(c_part)
 
             # Port 465 SSL via IPv4
             try:

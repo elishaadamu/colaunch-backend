@@ -714,6 +714,12 @@ class CreatorUpdate(BaseModel):
     selectedConceptId: Optional[str] = None
     selected_concept: Optional[Dict[str, Any]] = None
     selectedConcept: Optional[Dict[str, Any]] = None
+    product_concepts: Optional[List[Dict[str, Any]]] = None
+    productConcepts: Optional[List[Dict[str, Any]]] = None
+    audience_intelligence: Optional[Dict[str, Any]] = None
+    audienceIntelligence: Optional[Dict[str, Any]] = None
+    brand_color: Optional[str] = None
+    brandColor: Optional[str] = None
 
 
 @router.patch("/{creator_id}")
@@ -780,6 +786,26 @@ def update_creator_details(
         sel_concept = data.get("selected_concept") or data.get("selectedConcept")
         if sel_concept:
             notes["selected_concept"] = sel_concept
+
+    updated_concepts = data.get("product_concepts") or data.get("productConcepts")
+    if isinstance(updated_concepts, list):
+        doc["productConcepts"] = updated_concepts
+        doc["product_concepts"] = updated_concepts
+        doc["hasAiConcepts"] = True
+        doc["has_ai_concepts"] = True
+        notes["product_concepts"] = updated_concepts
+
+    updated_intel = data.get("audience_intelligence") or data.get("audienceIntelligence")
+    if isinstance(updated_intel, dict):
+        doc["audienceIntelligence"] = updated_intel
+        doc["audience_intelligence"] = updated_intel
+        notes["audience_intelligence"] = updated_intel
+
+    updated_color = data.get("brand_color") or data.get("brandColor")
+    if updated_color and isinstance(updated_color, str):
+        doc["brand_color"] = updated_color.strip()
+        doc["brandColor"] = updated_color.strip()
+        notes["brand_color"] = updated_color.strip()
 
     doc["discovery_notes"] = json.dumps(notes)
     doc["updated_at"] = datetime.utcnow().isoformat()
@@ -1652,6 +1678,8 @@ def _creator_dict(c: Any, project_map: dict = None) -> dict:
         "bio": bio,
         "profile_url": profile_url,
         "avatar_url": avatar_url,
+        "brand_color": (c.get("brand_color") or c.get("brandColor")) if isinstance(c, dict) else getattr(c, "brand_color", None),
+        "brandColor": (c.get("brandColor") or c.get("brand_color")) if isinstance(c, dict) else getattr(c, "brand_color", None),
         "follower_count": follower_count,
         "niche": niche or [],
         "location": location,

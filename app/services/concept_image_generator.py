@@ -107,26 +107,29 @@ def generate_concept_card_image(
 
     mockup_type = str(concept.get("mockupType") or "saas_os").lower()
 
-    # Metrics
+    # Real features + tagline when supplied (avoid invented stats)
+    raw_features = concept.get("features") or concept.get("keyFeatures") or []
+    features_list = [str(f).strip() for f in raw_features if str(f).strip()][:4] if isinstance(raw_features, list) else []
+    tagline = str(concept.get("tagline") or concept.get("summary") or "").strip()
+
+    # Metrics (only when real feature mode isn't overriding)
     mockup_data = concept.get("mockup") if isinstance(concept.get("mockup"), dict) else {}
     mrr = str(
         concept.get("primaryMetric")
         or mockup_data.get("primaryMetric")
-        or "$22.4K MRR"
+        or "50/50 Split"
     ).strip()
-    if not mrr.endswith("MRR") and "$" in mrr:
-        mrr = f"{mrr} MRR"
 
     active_users = str(
         concept.get("activeMetric")
         or mockup_data.get("activeMetric")
-        or ("1,420 Copilot Runs" if mockup_type == "ai_copilot" else "420 Active" if mockup_type == "knowledge_hub" else "1,200")
+        or ("Included" if features_list else "Sample preview")
     ).strip()
 
     retention = str(
         concept.get("efficiencyMetric")
         or mockup_data.get("efficiencyMetric")
-        or ("98% Precision" if mockup_type == "ai_copilot" else "94% Renewal" if mockup_type == "knowledge_hub" else "91%")
+        or "Zero Upfront Cost"
     ).strip()
 
     customer = str(
@@ -220,118 +223,113 @@ def generate_concept_card_image(
     body_y1 = hdr_div_y + 10 * scale
     body_y2 = dash_y2 - 12 * scale
 
-    # Left Sidebar (Dash / Tasks / Flows tailored by archetype)
-    side_w = 125 * scale
+    # Left Sidebar (real key features when available, else archetype nav)
+    side_w = 240 * scale if features_list else 125 * scale
     side_x1 = dash_x1 + 12 * scale
     side_x2 = side_x1 + side_w
     draw.rounded_rectangle([side_x1, body_y1, side_x2, body_y2], radius=10 * scale, fill=(15, 23, 42, 230), outline=(30, 41, 59, 255), width=1 * scale)
 
-    if mockup_type == "ai_copilot":
-        nav_items = [
-            ("Copilot", (*accent_rgb,), True),
-            ("Prompts", (251, 191, 36), False),
-            ("Outputs", (148, 163, 184), False),
-        ]
-    elif mockup_type == "knowledge_hub":
-        nav_items = [
-            ("Vault", (*accent_rgb,), True),
-            ("Calls", (251, 191, 36), False),
-            ("Presets", (148, 163, 184), False),
-        ]
+    font_nav = _get_font(10 * scale if features_list else 11 * scale, is_bold=True)
+    if features_list:
+        row_h = (body_y2 - body_y1 - 12 * scale) / max(len(features_list), 1)
+        for idx, feat in enumerate(features_list):
+            fy1 = body_y1 + 6 * scale + idx * row_h + 2 * scale
+            fy2 = body_y1 + 6 * scale + (idx + 1) * row_h - 2 * scale
+            if idx == 0:
+                draw.rounded_rectangle(
+                    [side_x1 + 8 * scale, fy1, side_x2 - 8 * scale, fy2],
+                    radius=6 * scale,
+                    fill=(*accent_rgb, 36),
+                    outline=(*accent_rgb, 140),
+                    width=1 * scale,
+                )
+            mid_y = (fy1 + fy2) / 2
+            dot_c = (*accent_rgb, 255) if idx == 0 else (148, 163, 184, 200)
+            draw.ellipse([side_x1 + 16 * scale, mid_y - 3 * scale, side_x1 + 22 * scale, mid_y + 3 * scale], fill=dot_c)
+            short_f = feat if len(feat) <= 24 else feat[:23].rstrip(" &-,/") + "…"
+            draw.text((side_x1 + 28 * scale, mid_y - 6 * scale), short_f, fill=(248, 250, 252) if idx == 0 else (203, 213, 225), font=font_nav)
     else:
-        nav_items = [
-            ("Dash", (*accent_rgb,), True),
-            ("Tasks", (251, 191, 36), False),
-            ("Flows", (148, 163, 184), False),
-        ]
+        if mockup_type == "ai_copilot":
+            nav_items = [
+                ("Copilot", (*accent_rgb,), True),
+                ("Prompts", (251, 191, 36), False),
+                ("Outputs", (148, 163, 184), False),
+            ]
+        elif mockup_type == "knowledge_hub":
+            nav_items = [
+                ("Vault", (*accent_rgb,), True),
+                ("Calls", (251, 191, 36), False),
+                ("Presets", (148, 163, 184), False),
+            ]
+        else:
+            nav_items = [
+                ("Dash", (*accent_rgb,), True),
+                ("Tasks", (251, 191, 36), False),
+                ("Flows", (148, 163, 184), False),
+            ]
 
-    font_nav = _get_font(11 * scale, is_bold=True)
-    nav_h = (body_y2 - body_y1) / 3
-    for idx, (label, color, is_active) in enumerate(nav_items):
-        ny = body_y1 + idx * nav_h + (nav_h / 2) - 8 * scale
-        draw.ellipse([side_x1 + 16 * scale, ny + 4 * scale, side_x1 + 24 * scale, ny + 12 * scale], fill=color)
-        draw.text((side_x1 + 32 * scale, ny), label, fill=(241, 245, 249) if is_active else (148, 163, 184), font=font_nav)
+        nav_h = (body_y2 - body_y1) / 3
+        for idx, (label, color, is_active) in enumerate(nav_items):
+            ny = body_y1 + idx * nav_h + (nav_h / 2) - 8 * scale
+            draw.ellipse([side_x1 + 16 * scale, ny + 4 * scale, side_x1 + 24 * scale, ny + 12 * scale], fill=color)
+            draw.text((side_x1 + 32 * scale, ny), label, fill=(241, 245, 249) if is_active else (148, 163, 184), font=font_nav)
 
-    # Right Chart Area (MRR Trajectory + glowing curve styled with dynamic brand accent)
+    # Right Chart Area
     chart_x1 = side_x2 + 12 * scale
     chart_x2 = dash_x2 - 12 * scale
     draw.rounded_rectangle([chart_x1, body_y1, chart_x2, body_y2], radius=10 * scale, fill=(11, 15, 23, 240), outline=(30, 41, 59, 255), width=1 * scale)
 
-    # Chart Header: MRR Trajectory (left), +38.4% (right)
     chart_hdr_y = body_y1 + 12 * scale
-    chart_title = "Copilot Efficiency" if mockup_type == "ai_copilot" else "Mastermind MRR" if mockup_type == "knowledge_hub" else "MRR Trajectory"
-    draw.text((chart_x1 + 16 * scale, chart_hdr_y), chart_title, fill=(148, 163, 184, 255), font=_get_font(11 * scale, is_bold=True))
-    draw.text((chart_x2 - 76 * scale, chart_hdr_y), "+38.4%", fill=(*accent_rgb, 255), font=_get_font(12 * scale, is_bold=True, is_mono=True))
+    chart_title = (features_list[1][:26] + ("…" if len(features_list[1]) > 26 else "")) if len(features_list) > 1 else ("Copilot Workspace" if mockup_type == "ai_copilot" else "Member Vault" if mockup_type == "knowledge_hub" else "Workflow Overview")
+    draw.text((chart_x1 + 16 * scale, chart_hdr_y), chart_title, fill=(226, 232, 240, 255), font=_get_font(11 * scale, is_bold=True))
+    right_badge = "Sample Preview" if features_list else "Illustration"
+    rb_font = _get_font(9 * scale, is_mono=True)
+    rb_w = draw.textlength(right_badge, font=rb_font) if hasattr(draw, "textlength") else 80 * scale
+    draw.text((chart_x2 - 14 * scale - rb_w, chart_hdr_y + 1 * scale), right_badge, fill=(*accent_rgb, 255), font=rb_font)
 
-    # Glowing Area Curve in creator's dynamic brand accent
+    # Sample bars (illustrative shapes only, no invented numbers)
     chart_base_y = body_y2 - 34 * scale
     chart_top_y = body_y1 + 46 * scale
     chart_span_w = chart_x2 - chart_x1 - 32 * scale
 
-    raw_ctrls = [
-        (0.0, 0.88),
-        (0.2, 0.84),
-        (0.38, 0.80),
-        (0.55, 0.65),
-        (0.72, 0.38),
-        (0.88, 0.22),
-        (1.0, 0.12),
-    ]
-    curve_points = []
-    poly_pts = [(chart_x1 + 16 * scale, chart_base_y)]
-    for rx, ry in raw_ctrls:
-        px = chart_x1 + 16 * scale + rx * chart_span_w
-        py = chart_top_y + ry * (chart_base_y - chart_top_y)
-        curve_points.append((px, py))
-        poly_pts.append((px, py))
-    poly_pts.append((chart_x1 + 16 * scale + chart_span_w, chart_base_y))
+    bar_ratios = [0.34, 0.52, 0.44, 0.68, 0.56, 0.84, 0.72]
+    bar_gap = 8 * scale
+    bar_w = max(8 * scale, (chart_span_w - bar_gap * (len(bar_ratios) - 1)) / len(bar_ratios))
+    for i, r in enumerate(bar_ratios):
+        bx1 = chart_x1 + 16 * scale + i * (bar_w + bar_gap)
+        bx2 = bx1 + bar_w
+        bh = r * (chart_base_y - chart_top_y)
+        by1 = chart_base_y - bh
+        b_fill = (*accent_rgb, 220 if i >= len(bar_ratios) - 2 else 95)
+        draw.rounded_rectangle([bx1, by1, bx2, chart_base_y], radius=4 * scale, fill=b_fill)
 
-    # Fill polygon with dynamic brand glow
-    draw.polygon(poly_pts, fill=(*accent_rgb, 50))
-
-    sub_poly = [(chart_x1 + 16 * scale, chart_base_y)]
-    for px, py in curve_points:
-        sub_poly.append((px, py + (chart_base_y - py) * 0.45))
-    sub_poly.append((chart_x1 + 16 * scale + chart_span_w, chart_base_y))
-    draw.polygon(sub_poly, fill=(*accent_rgb, 28))
-
-    # Draw vibrant accent curve stroke (3px thick)
-    for i in range(len(curve_points) - 1):
-        draw.line([curve_points[i], curve_points[i + 1]], fill=(*accent_rgb, 255), width=3 * scale)
-
-    # Bottom labels: Launch Day (left) ... Target (right)
     chart_ftr_y = body_y2 - 20 * scale
-    draw.text((chart_x1 + 16 * scale, chart_ftr_y), "Launch Day", fill=(100, 116, 139, 255), font=_get_font(9 * scale, is_mono=True))
-    target_str = f"Target: {mrr.split()[0]}" if mrr else "Target: $25K"
-    target_w = draw.textlength(target_str, font=_get_font(9 * scale, is_mono=True)) if hasattr(draw, "textlength") else 80 * scale
-    draw.text((chart_x2 - 16 * scale - target_w, chart_ftr_y), target_str, fill=(100, 116, 139, 255), font=_get_font(9 * scale, is_mono=True))
+    draw.text((chart_x1 + 16 * scale, chart_ftr_y), "Sample data, for illustration", fill=(100, 116, 139, 255), font=_get_font(9 * scale, is_mono=True))
 
-    # 4. 3 Metric Highlights Cards (y = 350 * scale to 420 * scale)
+    # 4. 3 Detail Highlights Cards (no invented numbers)
     cards_y1 = 350 * scale
     cards_y2 = 422 * scale
     total_card_w = W - 40 * scale
     col_w = (total_card_w - 24 * scale) / 3
 
-    # Metric 1: MRR Projected
     c1_x1 = 20 * scale
     c1_x2 = c1_x1 + col_w
     draw.rounded_rectangle([c1_x1, cards_y1, c1_x2, cards_y2], radius=12 * scale, fill=(15, 23, 42, 255), outline=(30, 41, 59, 255), width=1 * scale)
-    draw.text((c1_x1 + 18 * scale, cards_y1 + 12 * scale), "MRR PROJECTED", fill=(148, 163, 184, 255), font=font_metric_label)
-    draw.text((c1_x1 + 18 * scale, cards_y1 + 34 * scale), mrr, fill=(*accent_rgb, 255), font=font_metric_val)
+    draw.text((c1_x1 + 16 * scale, cards_y1 + 12 * scale), "PARTNERSHIP", fill=(148, 163, 184, 255), font=font_metric_label)
+    draw.text((c1_x1 + 16 * scale, cards_y1 + 34 * scale), mrr if len(mrr) <= 14 else "50/50 Split", fill=(*accent_rgb, 255), font=font_metric_val)
 
-    # Metric 2: Active Users
     c2_x1 = c1_x2 + 12 * scale
     c2_x2 = c2_x1 + col_w
     draw.rounded_rectangle([c2_x1, cards_y1, c2_x2, cards_y2], radius=12 * scale, fill=(15, 23, 42, 255), outline=(30, 41, 59, 255), width=1 * scale)
-    draw.text((c2_x1 + 18 * scale, cards_y1 + 12 * scale), "ACTIVE USERS", fill=(148, 163, 184, 255), font=font_metric_label)
-    draw.text((c2_x1 + 18 * scale, cards_y1 + 34 * scale), active_users, fill=(248, 250, 252, 255), font=font_metric_val)
+    draw.text((c2_x1 + 16 * scale, cards_y1 + 12 * scale), "KEY MODULES", fill=(148, 163, 184, 255), font=font_metric_label)
+    mod_txt = f"{len(features_list)} Included" if features_list else active_users
+    draw.text((c2_x1 + 16 * scale, cards_y1 + 34 * scale), mod_txt[:15], fill=(248, 250, 252, 255), font=font_metric_val)
 
-    # Metric 3: Retention
     c3_x1 = c2_x2 + 12 * scale
     c3_x2 = c3_x1 + col_w
     draw.rounded_rectangle([c3_x1, cards_y1, c3_x2, cards_y2], radius=12 * scale, fill=(15, 23, 42, 255), outline=(30, 41, 59, 255), width=1 * scale)
-    draw.text((c3_x1 + 18 * scale, cards_y1 + 12 * scale), "RETENTION", fill=(148, 163, 184, 255), font=font_metric_label)
-    draw.text((c3_x1 + 18 * scale, cards_y1 + 34 * scale), retention, fill=(56, 189, 248, 255), font=font_metric_val)
+    draw.text((c3_x1 + 16 * scale, cards_y1 + 12 * scale), "CREATOR COST", fill=(148, 163, 184, 255), font=font_metric_label)
+    draw.text((c3_x1 + 16 * scale, cards_y1 + 34 * scale), "$0 Upfront" if features_list else retention[:15], fill=(111, 207, 155, 255), font=font_metric_val)
 
     # 5. Footer Bar (Target Customer & Pricing)
     footer_divider_y = 436 * scale
