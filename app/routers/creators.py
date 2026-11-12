@@ -712,8 +712,8 @@ class CreatorUpdate(BaseModel):
     reply_text: Optional[str] = None
     selected_concept_id: Optional[str] = None
     selectedConceptId: Optional[str] = None
-    selected_concept: Optional[Dict[str, Any]] = None
-    selectedConcept: Optional[Dict[str, Any]] = None
+    selected_concept: Optional[Any] = None
+    selectedConcept: Optional[Any] = None
     product_concepts: Optional[List[Dict[str, Any]]] = None
     productConcepts: Optional[List[Dict[str, Any]]] = None
     audience_intelligence: Optional[Dict[str, Any]] = None

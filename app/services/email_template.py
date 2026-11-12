@@ -502,6 +502,7 @@ def _render_single_concept_block(
     key_features = [str(f).strip() for f in raw_features if str(f).strip()][:4] if isinstance(raw_features, list) else []
 
     landing_url = _build_concept_landing_url(concept, creator_name, index)
+    select_url = f"{landing_url}{'&' if '?' in landing_url else '?'}choose=1"
     concept_img = _build_concept_card_image_url(concept, accent_hex, key_features)
 
     contact_email = get_contact_reply_email()
@@ -606,7 +607,7 @@ def _render_single_concept_block(
         '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0"><tr>'
         f'<td class="stack btn-full" valign="middle">{_button(landing_url, "View live landing page &rarr;", bg=accent_hex, color=accent_ink)}</td>'
         f'<td class="stack stack-gap" align="right" valign="middle" style="text-align:right;">'
-        f'<a href="{html.escape(mailto_href, quote=True)}" style="font-family:{F_BODY};font-size:13px;font-weight:700;color:{INK};text-decoration:underline;">'
+        f'<a href="{html.escape(select_url, quote=True)}" target="_blank" style="font-family:{F_BODY};font-size:13px;font-weight:700;color:{INK};text-decoration:underline;">'
         f'Select Concept {index + 1} &rarr;</a></td>'
         '</tr></table>'
         f'<div style="font-size:12px;color:{MUTED};margin-top:12px;word-break:break-all;line-height:1.5;">'

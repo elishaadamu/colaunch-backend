@@ -616,6 +616,273 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
     }
 
 
+class ConceptSelectionRequest(BaseModel):
+    creator_id: Optional[str] = None
+    creator_slug: Optional[str] = None
+    creator_name: Optional[str] = None
+    creator_email: Optional[str] = None
+    concept_id: Optional[str] = None
+    concept_name: str
+    concept_index: int = 0
+    concept: Optional[Dict[str, Any]] = None
+    notes: Optional[str] = ""
+
+
+@router.post("/concept-selection")
+def submit_concept_selection(payload: ConceptSelectionRequest, db: Session = Depends(get_db)):
+    """
+    Public endpoint triggered when a creator clicks 'Greenlight / Select Concept' on their
+    shared live landing page (/preorder/:slug?concept=...).
+    Persists their concept choice on the creator record, inserts an authentic inbound Step 6
+    Reply into their thread so the Step 6 AI immediately locks onto the selected concept,
+    and dispatches a notification email to CoLaunch Studio.
+    """
+    import json
+    import re
+    import uuid
+    from app.config import settings
+    from app.models.creator import Creator
+    from app.integrations.email_provider import email_provider
+    from app.services.email_template import format_luxury_html_email
+    from app.services.autonomous_outreach import is_real_valid_email
+
+    def _alnum(val: Optional[str]) -> str:
+        return re.sub(r"[^a-z0-9]", "", (val or "").lower())
+
+    clean_slug = _alnum(payload.creator_slug or payload.creator_name or payload.creator_id or "creator") or "creator"
+    concept_name = (payload.concept_name or f"Concept {payload.concept_index + 1}").strip()
+    concept_dict = dict(payload.concept or {})
+    if payload.concept_id and not concept_dict.get("id"):
+        concept_dict["id"] = payload.concept_id
+    if not concept_dict.get("name"):
+        concept_dict["name"] = concept_name
+    concept_dict["selectedViaLandingPage"] = True
+    concept_dict["selectedAt"] = datetime.utcnow().isoformat()
+
+    # 1. Resolve creator in MongoDB & SQLAlchemy
+    matched_mongo = None
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("creators")
+        if coll is not None:
+            if payload.creator_id:
+                matched_mongo = coll.find_one({"$or": [{"_id": payload.creator_id}, {"id": payload.creator_id}]})
+            if not matched_mongo and clean_slug:
+                for doc in coll.find({}):
+                    c_h = _alnum(doc.get("handle"))
+                    c_n = _alnum(doc.get("display_name") or doc.get("name"))
+                    c_id = _alnum(str(doc.get("id") or doc.get("_id") or ""))
+                    if clean_slug in (c_h, c_n, c_id):
+                        matched_mongo = doc
+                        break
+    except Exception:
+        matched_mongo = None
+
+    creator_sql = None
+    if payload.creator_id:
+        creator_sql = db.get(Creator, payload.creator_id)
+    if not creator_sql and matched_mongo:
+        mid = str(matched_mongo.get("id") or matched_mongo.get("_id") or "")
+        if mid:
+            creator_sql = db.get(Creator, mid)
+    if not creator_sql and clean_slug:
+        for cand in db.query(Creator).all():
+            if clean_slug in (_alnum(cand.handle), _alnum(cand.display_name), _alnum(cand.id)):
+                creator_sql = cand
+                break
+
+    resolved_creator_id = (
+        (str(matched_mongo.get("id") or matched_mongo.get("_id")) if matched_mongo else None)
+        or (creator_sql.id if creator_sql else None)
+        or payload.creator_id
+    )
+    resolved_creator_name = (
+        (matched_mongo.get("display_name") or matched_mongo.get("name") or matched_mongo.get("handle") if matched_mongo else None)
+        or (creator_sql.display_name or creator_sql.handle if creator_sql else None)
+        or payload.creator_name
+        or payload.creator_slug
+        or "Creator Partner"
+    )
+    resolved_creator_email = (
+        (payload.creator_email or "").strip()
+        or ((matched_mongo.get("email_public") or matched_mongo.get("email") or "").strip() if matched_mongo else "")
+        or ((creator_sql.email_public or "").strip() if creator_sql else "")
+    )
+
+    notes_text = (payload.notes or "").strip()
+    selection_body = (
+        f"Hi CoLaunch team,\n\n"
+        f"I reviewed the interactive landing pages and I choose Concept {payload.concept_index + 1}: {concept_name}.\n\n"
+        f"- Selected Concept: {concept_name} (Concept {payload.concept_index + 1})\n"
+        f"- Pricing: {concept_dict.get('pricing') or '$29/mo Starter • $79/mo Pro'}\n"
+        + (f"- Creator Notes / Tweaks: {notes_text}\n" if notes_text else "")
+        + f"\nI am ready to move forward and start building!"
+        + f"\n\n---\nRef: [CF-STAGE:STEP6_PITCH | CF-CID:{resolved_creator_id or clean_slug}]"
+    )
+    selection_subject = (
+        f"Re: 3 bespoke software concepts & landing pages — Concept {payload.concept_index + 1}: {concept_name} Selected "
+        f"[CF-STAGE:STEP6_PITCH | CF-CID:{resolved_creator_id or clean_slug}]"
+    )
+
+    # Resolve concrete concept_id from creator's saved concepts if possible
+    resolved_concept_id = payload.concept_id or concept_dict.get("id")
+    saved_concepts = []
+    if matched_mongo:
+        saved_concepts = matched_mongo.get("productConcepts") or matched_mongo.get("product_concepts") or []
+    for idx_c, sc in enumerate(saved_concepts):
+        if isinstance(sc, dict):
+            if _alnum(sc.get("name")) == _alnum(concept_name) or (resolved_concept_id and sc.get("id") == resolved_concept_id):
+                resolved_concept_id = sc.get("id") or resolved_concept_id or f"concept-{idx_c + 1}"
+                concept_dict = {**sc, **concept_dict, "id": resolved_concept_id}
+                break
+    if not resolved_concept_id:
+        resolved_concept_id = f"concept-{payload.concept_index + 1}"
+    concept_dict["id"] = resolved_concept_id
+
+    # Persist into Mongo creator document
+    if matched_mongo is not None:
+        try:
+            from app.mongodb import get_collection
+            coll = get_collection("creators")
+            existing_notes = {}
+            if matched_mongo.get("discovery_notes") and str(matched_mongo["discovery_notes"]).startswith("{"):
+                try:
+                    existing_notes = json.loads(matched_mongo["discovery_notes"])
+                except Exception:
+                    existing_notes = {}
+            existing_notes["selected_concept_id"] = resolved_concept_id
+            existing_notes["selected_concept"] = concept_dict
+            existing_notes["selected_concept_index"] = payload.concept_index
+            existing_notes["concept_selection_notes"] = notes_text
+            existing_notes["reply_classification"] = "interested"
+            existing_notes["reply_text"] = selection_body
+            if resolved_creator_email and not matched_mongo.get("email_public"):
+                matched_mongo["email_public"] = resolved_creator_email
+            matched_mongo["status"] = "replied"
+            matched_mongo["selectedConceptId"] = resolved_concept_id
+            matched_mongo["selectedConcept"] = concept_dict
+            matched_mongo["discovery_notes"] = json.dumps(existing_notes)
+            matched_mongo["updated_at"] = datetime.utcnow().isoformat()
+            if coll is not None:
+                coll.replace_one({"_id": matched_mongo["_id"]}, matched_mongo)
+        except Exception:
+            pass
+
+    # Persist into SQLAlchemy Creator & Thread + inbound Reply
+    if creator_sql is not None:
+        try:
+            sql_notes = {}
+            if creator_sql.discovery_notes and str(creator_sql.discovery_notes).startswith("{"):
+                try:
+                    sql_notes = json.loads(creator_sql.discovery_notes)
+                except Exception:
+                    sql_notes = {}
+            sql_notes["selected_concept_id"] = resolved_concept_id
+            sql_notes["selected_concept"] = concept_dict
+            sql_notes["reply_classification"] = "interested"
+            sql_notes["reply_text"] = selection_body
+            creator_sql.discovery_notes = json.dumps(sql_notes)
+            creator_sql.status = "replied"
+            if resolved_creator_email and not creator_sql.email_public:
+                creator_sql.email_public = resolved_creator_email
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    admin_emails = {
+        (settings.GOOGLE_EMAIL or "").lower().strip(),
+        (settings.FROM_EMAIL or "").lower().strip(),
+        "creatorforgeweb@gmail.com",
+        "creatorforgestudio@gmail.com",
+        "partnerships@creatorforge.com",
+    }
+    sender_addr = resolved_creator_email if (is_real_valid_email(resolved_creator_email) and resolved_creator_email.lower() not in admin_emails) else f"{clean_slug}@creator-selection.co-launch.app"
+
+    thread = None
+    if resolved_creator_id:
+        thread = db.query(Thread).filter(Thread.creator_id == resolved_creator_id).order_by(Thread.last_activity.desc()).first()
+    if not thread:
+        out_msg = OutreachMessage(
+            creator_id=resolved_creator_id,
+            campaign_id="default",
+            subject=f"3 bespoke software concepts & landing pages for @{clean_slug}",
+            body="Step 6 Concept Showcase Pitch",
+            send_method="email",
+            status="sent",
+            sent_at=datetime.utcnow(),
+        )
+        db.add(out_msg)
+        db.commit()
+        db.refresh(out_msg)
+        thread = Thread(
+            creator_id=resolved_creator_id,
+            outreach_message_id=out_msg.id,
+            status="open",
+            created_at=datetime.utcnow(),
+            last_activity=datetime.utcnow(),
+        )
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+
+    inbound_reply = Reply(
+        thread_id=thread.id,
+        from_address=sender_addr,
+        subject=selection_subject,
+        body=selection_body,
+        classification="interested",
+        sentiment="positive",
+        ai_summary=f"Creator selected Concept {payload.concept_index + 1}: {concept_name} via live landing page",
+        crm_stage="step6_concept_selected",
+        received_at=datetime.utcnow(),
+    )
+    db.add(inbound_reply)
+    thread.last_activity = datetime.utcnow()
+    thread.status = "open"
+    db.commit()
+    db.refresh(inbound_reply)
+
+    # 2. Dispatch real email to CoLaunch Studio inbox (and creator receipt if valid email exists)
+    studio_email = (settings.GOOGLE_EMAIL or settings.FROM_EMAIL or "creatorforgeweb@gmail.com").strip()
+    email_sent = False
+    email_error = None
+    try:
+        notif_subject = f"[Concept Selected] {resolved_creator_name} chose Concept {payload.concept_index + 1}: {concept_name}"
+        notif_html = format_luxury_html_email(
+            subject=notif_subject,
+            body_text=(
+                f"{resolved_creator_name} clicked their live concept landing page and greenlit:\n\n"
+                f"**Concept {payload.concept_index + 1}: {concept_name}**\n"
+                f"• Creator Email: {resolved_creator_email or 'Not provided'}\n"
+                f"• Pricing: {concept_dict.get('pricing') or '$29/mo Starter'}\n"
+                + (f"• Creator Notes: {notes_text}\n" if notes_text else "")
+                + f"\nOpen Step 6 in CoLaunch to review the selection and click Create Project."
+            ),
+            creator_name=resolved_creator_name,
+        )
+        email_provider.send(
+            to_email=studio_email,
+            subject=notif_subject,
+            body_html=notif_html,
+            body_text=selection_body,
+        )
+        email_sent = True
+    except Exception as e:
+        email_error = str(e)
+
+    return {
+        "status": "selected",
+        "creator_id": resolved_creator_id,
+        "selected_concept_id": resolved_concept_id,
+        "selected_concept": concept_dict,
+        "thread_id": thread.id,
+        "reply_id": inbound_reply.id,
+        "email_sent": email_sent,
+        "email_recipient": studio_email,
+        "email_error": email_error,
+    }
+
+
 class SendReplyRequest(BaseModel):
     body: str
     to_email: Optional[str] = None

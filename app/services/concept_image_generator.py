@@ -14,6 +14,44 @@ import math
 from typing import Dict, Any, Optional
 from PIL import Image, ImageDraw, ImageFont
 
+# Color contrast & opaque surface blending helpers (avoid RGBA alpha bleed onto light email canvases)
+def _relative_luminance(rgb) -> float:
+    def _lin(c: int) -> float:
+        v = max(0.0, min(1.0, c / 255.0))
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * _lin(rgb[0]) + 0.7152 * _lin(rgb[1]) + 0.0722 * _lin(rgb[2])
+
+
+def _contrast_ratio(rgb_a, rgb_b) -> float:
+    la = _relative_luminance(rgb_a)
+    lb = _relative_luminance(rgb_b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def _mix_rgb(fg, bg, weight_fg: float):
+    w = max(0.0, min(1.0, weight_fg))
+    return (
+        int(fg[0] * w + bg[0] * (1.0 - w)),
+        int(fg[1] * w + bg[1] * (1.0 - w)),
+        int(fg[2] * w + bg[2] * (1.0 - w)),
+    )
+
+
+def _safe_text_on_dark(accent_rgb, bg_rgb, min_ratio: float = 5.0):
+    """Brightens accent_rgb toward white until it hits min_ratio contrast on bg_rgb."""
+    for step in range(21):
+        cand = _mix_rgb((255, 255, 255), accent_rgb, step / 20.0)
+        if _contrast_ratio(cand, bg_rgb) >= min_ratio:
+            return (*cand, 255)
+    return (248, 250, 252, 255)
+
+
+def _on_accent_ink(accent_rgb):
+    w_cr = _contrast_ratio((255, 255, 255), accent_rgb)
+    b_cr = _contrast_ratio((11, 12, 16), accent_rgb)
+    return (255, 255, 255, 255) if w_cr >= b_cr else (11, 12, 16, 255)
+
+
 # Font resolution helper
 def _get_font(size: int, is_bold: bool = False, is_mono: bool = False) -> ImageFont.ImageFont:
     """Attempts to find the cleanest system font on macOS/Linux with fallbacks."""
@@ -168,16 +206,33 @@ def generate_concept_card_image(
     spec_label = f"{name} • Software Spec"
     draw.text((82 * scale, dot_y - 7 * scale), spec_label, fill=(148, 163, 184, 255), font=font_url)
 
-    # Right Badge: Concept Archetype pill (styled with dynamic brand accent)
+    # Opaque surface palette derived from dark surfaces (never alpha-bleed onto light email cards)
+    card_bg_rgb = (8, 10, 12)
+    dash_bg_rgb = (4, 6, 10)
+    side_bg_rgb = (15, 23, 42)
+    chart_bg_rgb = (11, 15, 23)
+
+    badge_fill_rgb = _mix_rgb(accent_rgb, card_bg_rgb, 0.22)
+    badge_text_rgba = _safe_text_on_dark(accent_rgb, badge_fill_rgb, 5.0)
+    ws_fill_rgb = _mix_rgb(accent_rgb, dash_bg_rgb, 0.18)
+    ws_text_rgba = _safe_text_on_dark(accent_rgb, ws_fill_rgb, 5.0)
+    active_pill_rgb = _mix_rgb(accent_rgb, side_bg_rgb, 0.28)
+    bar_soft_rgb = _mix_rgb(accent_rgb, chart_bg_rgb, 0.42)
+    accent_text_card = _safe_text_on_dark(accent_rgb, card_bg_rgb, 5.0)
+    accent_text_panel = _safe_text_on_dark(accent_rgb, side_bg_rgb, 5.0)
+    accent_text_chart = _safe_text_on_dark(accent_rgb, chart_bg_rgb, 5.0)
+    on_accent_initial = _on_accent_ink(accent_rgb)
+
+    # Right Badge: Concept Archetype pill (styled with dynamic brand accent on opaque dark tint)
     badge_label = "AI Copilot" if mockup_type == "ai_copilot" else "VIP Vault" if mockup_type == "knowledge_hub" else "MVP Ready"
     badge_w = 98 * scale
     badge_h = 22 * scale
     badge_x = W - pad - 20 * scale - badge_w
     badge_y = dot_y - 11 * scale
-    draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=6 * scale, fill=(*accent_rgb, 35), outline=(*accent_rgb, 180), width=1 * scale)
+    draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=6 * scale, fill=(*badge_fill_rgb, 255), outline=(*accent_rgb, 255), width=1 * scale)
     # Dynamic pulse dot inside badge
     draw.ellipse([badge_x + 9 * scale, badge_y + 8 * scale, badge_x + 15 * scale, badge_y + 14 * scale], fill=(*accent_rgb, 255))
-    draw.text((badge_x + 20 * scale, badge_y + 4 * scale), badge_label, fill=(*accent_rgb, 255), font=font_badge)
+    draw.text((badge_x + 20 * scale, badge_y + 4 * scale), badge_label, fill=badge_text_rgba, font=font_badge)
 
     # Chrome bottom divider
     draw.line([(pad + 12 * scale, 48 * scale), (W - pad - 12 * scale, 48 * scale)], fill=(30, 41, 59, 255), width=1 * scale)
@@ -188,7 +243,7 @@ def generate_concept_card_image(
     dash_x2 = W - 20 * scale
     dash_y2 = 338 * scale
     # Dark dashboard background #04060A with border
-    draw.rounded_rectangle([dash_x1, dash_y1, dash_x2, dash_y2], radius=14 * scale, fill=(4, 6, 10, 255), outline=(30, 41, 59, 255), width=1 * scale)
+    draw.rounded_rectangle([dash_x1, dash_y1, dash_x2, dash_y2], radius=14 * scale, fill=(*dash_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
 
     # Mini App Header Bar inside canvas (y = dash_y1 to dash_y1 + 42 * scale)
     hdr_y = dash_y1 + 10 * scale
@@ -199,7 +254,7 @@ def generate_concept_card_image(
     draw.ellipse([av_x, av_y, av_x + av_r * 2, av_y + av_r * 2], fill=(*accent_rgb, 255))
     initial_char = (name[0] if name else "C").upper()
     font_av = _get_font(12 * scale, is_bold=True)
-    draw.text((av_x + 8 * scale, av_y + 5 * scale), initial_char, fill=(255, 255, 255, 255), font=font_av)
+    draw.text((av_x + 8 * scale, av_y + 5 * scale), initial_char, fill=on_accent_initial, font=font_av)
 
     # Concept Name in bold white font
     font_app_name = _get_font(13 * scale, is_bold=True)
@@ -207,17 +262,17 @@ def generate_concept_card_image(
 
     # Right badge: Live Workspace / Copilot / Vault
     ws_label = "AI Copilot Engine" if mockup_type == "ai_copilot" else "VIP Mastermind Vault" if mockup_type == "knowledge_hub" else "Live Workspace"
-    ws_w = 125 * scale
+    ws_w = 128 * scale
     ws_h = 24 * scale
     ws_x = dash_x2 - 16 * scale - ws_w
     ws_y = hdr_y + 4 * scale
-    draw.rounded_rectangle([ws_x, ws_y, ws_x + ws_w, ws_y + ws_h], radius=6 * scale, fill=(15, 23, 42, 255), outline=(*accent_rgb, 120), width=1 * scale)
+    draw.rounded_rectangle([ws_x, ws_y, ws_x + ws_w, ws_y + ws_h], radius=6 * scale, fill=(*ws_fill_rgb, 255), outline=(*accent_rgb, 255), width=1 * scale)
     font_ws = _get_font(9 * scale, is_mono=True)
-    draw.text((ws_x + 10 * scale, ws_y + 6 * scale), ws_label, fill=(*accent_rgb, 255), font=font_ws)
+    draw.text((ws_x + 10 * scale, ws_y + 6 * scale), ws_label, fill=ws_text_rgba, font=font_ws)
 
     # Divider under header
     hdr_div_y = dash_y1 + 44 * scale
-    draw.line([(dash_x1 + 12 * scale, hdr_div_y), (dash_x2 - 12 * scale, hdr_div_y)], fill=(30, 41, 59, 180), width=1 * scale)
+    draw.line([(dash_x1 + 12 * scale, hdr_div_y), (dash_x2 - 12 * scale, hdr_div_y)], fill=(30, 41, 59, 255), width=1 * scale)
 
     # Content Area below header
     body_y1 = hdr_div_y + 10 * scale
@@ -227,7 +282,7 @@ def generate_concept_card_image(
     side_w = 240 * scale if features_list else 125 * scale
     side_x1 = dash_x1 + 12 * scale
     side_x2 = side_x1 + side_w
-    draw.rounded_rectangle([side_x1, body_y1, side_x2, body_y2], radius=10 * scale, fill=(15, 23, 42, 230), outline=(30, 41, 59, 255), width=1 * scale)
+    draw.rounded_rectangle([side_x1, body_y1, side_x2, body_y2], radius=10 * scale, fill=(*side_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
 
     font_nav = _get_font(10 * scale if features_list else 11 * scale, is_bold=True)
     if features_list:
@@ -239,15 +294,15 @@ def generate_concept_card_image(
                 draw.rounded_rectangle(
                     [side_x1 + 8 * scale, fy1, side_x2 - 8 * scale, fy2],
                     radius=6 * scale,
-                    fill=(*accent_rgb, 36),
-                    outline=(*accent_rgb, 140),
+                    fill=(*active_pill_rgb, 255),
+                    outline=(*accent_rgb, 255),
                     width=1 * scale,
                 )
             mid_y = (fy1 + fy2) / 2
-            dot_c = (*accent_rgb, 255) if idx == 0 else (148, 163, 184, 200)
+            dot_c = (*accent_rgb, 255) if idx == 0 else (148, 163, 184, 255)
             draw.ellipse([side_x1 + 16 * scale, mid_y - 3 * scale, side_x1 + 22 * scale, mid_y + 3 * scale], fill=dot_c)
             short_f = feat if len(feat) <= 24 else feat[:23].rstrip(" &-,/") + "…"
-            draw.text((side_x1 + 28 * scale, mid_y - 6 * scale), short_f, fill=(248, 250, 252) if idx == 0 else (203, 213, 225), font=font_nav)
+            draw.text((side_x1 + 28 * scale, mid_y - 6 * scale), short_f, fill=(255, 255, 255, 255) if idx == 0 else (203, 213, 225, 255), font=font_nav)
     else:
         if mockup_type == "ai_copilot":
             nav_items = [
@@ -277,7 +332,7 @@ def generate_concept_card_image(
     # Right Chart Area
     chart_x1 = side_x2 + 12 * scale
     chart_x2 = dash_x2 - 12 * scale
-    draw.rounded_rectangle([chart_x1, body_y1, chart_x2, body_y2], radius=10 * scale, fill=(11, 15, 23, 240), outline=(30, 41, 59, 255), width=1 * scale)
+    draw.rounded_rectangle([chart_x1, body_y1, chart_x2, body_y2], radius=10 * scale, fill=(*chart_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
 
     chart_hdr_y = body_y1 + 12 * scale
     chart_title = (features_list[1][:26] + ("…" if len(features_list[1]) > 26 else "")) if len(features_list) > 1 else ("Copilot Workspace" if mockup_type == "ai_copilot" else "Member Vault" if mockup_type == "knowledge_hub" else "Workflow Overview")
@@ -285,9 +340,9 @@ def generate_concept_card_image(
     right_badge = "Sample Preview" if features_list else "Illustration"
     rb_font = _get_font(9 * scale, is_mono=True)
     rb_w = draw.textlength(right_badge, font=rb_font) if hasattr(draw, "textlength") else 80 * scale
-    draw.text((chart_x2 - 14 * scale - rb_w, chart_hdr_y + 1 * scale), right_badge, fill=(*accent_rgb, 255), font=rb_font)
+    draw.text((chart_x2 - 14 * scale - rb_w, chart_hdr_y + 1 * scale), right_badge, fill=accent_text_chart, font=rb_font)
 
-    # Sample bars (illustrative shapes only, no invented numbers)
+    # Sample bars (illustrative opaque shapes only, no invented numbers)
     chart_base_y = body_y2 - 34 * scale
     chart_top_y = body_y1 + 46 * scale
     chart_span_w = chart_x2 - chart_x1 - 32 * scale
@@ -300,11 +355,11 @@ def generate_concept_card_image(
         bx2 = bx1 + bar_w
         bh = r * (chart_base_y - chart_top_y)
         by1 = chart_base_y - bh
-        b_fill = (*accent_rgb, 220 if i >= len(bar_ratios) - 2 else 95)
+        b_fill = (*accent_rgb, 255) if i >= len(bar_ratios) - 2 else (*bar_soft_rgb, 255)
         draw.rounded_rectangle([bx1, by1, bx2, chart_base_y], radius=4 * scale, fill=b_fill)
 
     chart_ftr_y = body_y2 - 20 * scale
-    draw.text((chart_x1 + 16 * scale, chart_ftr_y), "Sample data, for illustration", fill=(100, 116, 139, 255), font=_get_font(9 * scale, is_mono=True))
+    draw.text((chart_x1 + 16 * scale, chart_ftr_y), "Sample data, for illustration", fill=(148, 163, 184, 255), font=_get_font(9 * scale, is_mono=True))
 
     # 4. 3 Detail Highlights Cards (no invented numbers)
     cards_y1 = 350 * scale
@@ -314,20 +369,20 @@ def generate_concept_card_image(
 
     c1_x1 = 20 * scale
     c1_x2 = c1_x1 + col_w
-    draw.rounded_rectangle([c1_x1, cards_y1, c1_x2, cards_y2], radius=12 * scale, fill=(15, 23, 42, 255), outline=(30, 41, 59, 255), width=1 * scale)
+    draw.rounded_rectangle([c1_x1, cards_y1, c1_x2, cards_y2], radius=12 * scale, fill=(*side_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
     draw.text((c1_x1 + 16 * scale, cards_y1 + 12 * scale), "PARTNERSHIP", fill=(148, 163, 184, 255), font=font_metric_label)
-    draw.text((c1_x1 + 16 * scale, cards_y1 + 34 * scale), mrr if len(mrr) <= 14 else "50/50 Split", fill=(*accent_rgb, 255), font=font_metric_val)
+    draw.text((c1_x1 + 16 * scale, cards_y1 + 34 * scale), mrr if len(mrr) <= 14 else "50/50 Split", fill=accent_text_panel, font=font_metric_val)
 
     c2_x1 = c1_x2 + 12 * scale
     c2_x2 = c2_x1 + col_w
-    draw.rounded_rectangle([c2_x1, cards_y1, c2_x2, cards_y2], radius=12 * scale, fill=(15, 23, 42, 255), outline=(30, 41, 59, 255), width=1 * scale)
+    draw.rounded_rectangle([c2_x1, cards_y1, c2_x2, cards_y2], radius=12 * scale, fill=(*side_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
     draw.text((c2_x1 + 16 * scale, cards_y1 + 12 * scale), "KEY MODULES", fill=(148, 163, 184, 255), font=font_metric_label)
     mod_txt = f"{len(features_list)} Included" if features_list else active_users
     draw.text((c2_x1 + 16 * scale, cards_y1 + 34 * scale), mod_txt[:15], fill=(248, 250, 252, 255), font=font_metric_val)
 
     c3_x1 = c2_x2 + 12 * scale
     c3_x2 = c3_x1 + col_w
-    draw.rounded_rectangle([c3_x1, cards_y1, c3_x2, cards_y2], radius=12 * scale, fill=(15, 23, 42, 255), outline=(30, 41, 59, 255), width=1 * scale)
+    draw.rounded_rectangle([c3_x1, cards_y1, c3_x2, cards_y2], radius=12 * scale, fill=(*side_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
     draw.text((c3_x1 + 16 * scale, cards_y1 + 12 * scale), "CREATOR COST", fill=(148, 163, 184, 255), font=font_metric_label)
     draw.text((c3_x1 + 16 * scale, cards_y1 + 34 * scale), "$0 Upfront" if features_list else retention[:15], fill=(111, 207, 155, 255), font=font_metric_val)
 
@@ -339,9 +394,9 @@ def generate_concept_card_image(
     # Target customer on left
     draw.text((24 * scale, footer_text_y), customer, fill=(148, 163, 184, 255), font=font_footer_cust)
 
-    # Pricing on right (styled with dynamic brand accent)
+    # Pricing on right (styled with high-contrast accent on dark card)
     pricing_w = draw.textlength(pricing, font=font_footer_price) if hasattr(draw, "textlength") else 160 * scale
-    draw.text((W - pad - 24 * scale - pricing_w, footer_text_y), pricing, fill=(*accent_rgb, 255), font=font_footer_price)
+    draw.text((W - pad - 24 * scale - pricing_w, footer_text_y), pricing, fill=accent_text_card, font=font_footer_price)
 
     # Convert to PNG buffer
     output_buf = io.BytesIO()
