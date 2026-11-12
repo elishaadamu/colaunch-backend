@@ -34,6 +34,7 @@ def render_dynamic_concept_card(
     mockup_type: str = "saas_os",
     tagline: Optional[str] = None,
     features: Optional[str] = None,
+    variant: Optional[int] = None,
 ):
     """
     Renders dynamic concept text into an authentic dark-mode concept card PNG
@@ -51,7 +52,8 @@ def render_dynamic_concept_card(
         "customer": customer,
         "pricing": pricing,
         "brandColor": brand_color,
-        "mockupType": mockup_type
+        "mockupType": mockup_type,
+        "variant": variant,
     }
     png_bytes = generate_concept_card_image(concept_data)
     return Response(

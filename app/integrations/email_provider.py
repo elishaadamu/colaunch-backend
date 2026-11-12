@@ -155,9 +155,9 @@ class EmailProvider:
                     smtp_body_html,
                 )
 
-            # Inline-attach concept preview PNGs if pointing to localhost (unreachable from Gmail proxy)
+            # Inline-attach concept preview PNGs directly so email clients always show crisp, current artwork without external proxy lag
             concept_img_matches = list(
-                _re.finditer(r'(https?://(?:localhost|127\.0\.0\.1)[^"\'\s>]+/api/outreach/concept-card-image\?[^"\'\s>]+)', smtp_body_html)
+                _re.finditer(r'(https?://[^"\'\s>]+/api/outreach/concept-card-image\?[^"\'\s>]+)', smtp_body_html)
             )
             if concept_img_matches:
                 try:
@@ -165,6 +165,7 @@ class EmailProvider:
                     for idx, m in enumerate(concept_img_matches[:3]):
                         raw_url = m.group(1).replace("&amp;", "&")
                         qs = _parse_qs(_urlparse(raw_url).query)
+                        raw_var = qs.get("variant", [None])[0]
                         c_data = {
                             "name": qs.get("name", [f"Concept {idx + 1}"])[0],
                             "appUrl": qs.get("app_url", [""])[0],
@@ -174,6 +175,7 @@ class EmailProvider:
                             "pricing": qs.get("pricing", [""])[0],
                             "brandColor": qs.get("brand_color", [""])[0],
                             "mockupType": qs.get("mockup_type", ["saas_os"])[0],
+                            "variant": int(raw_var) if raw_var is not None and str(raw_var).isdigit() else idx,
                         }
                         png_bytes = generate_concept_card_image(c_data)
                         cid_name = f"concept_preview_{idx}"

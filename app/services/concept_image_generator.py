@@ -144,6 +144,18 @@ def generate_concept_card_image(
                 pass
 
     mockup_type = str(concept.get("mockupType") or "saas_os").lower()
+    raw_variant = concept.get("variant")
+    if raw_variant is not None and str(raw_variant).strip() != "":
+        try:
+            variant_idx = int(raw_variant) % 3
+        except (ValueError, TypeError):
+            variant_idx = 0
+    elif mockup_type == "ai_copilot":
+        variant_idx = 1
+    elif mockup_type == "knowledge_hub":
+        variant_idx = 2
+    else:
+        variant_idx = 0
 
     # Real features + tagline when supplied (avoid invented stats)
     raw_features = concept.get("features") or concept.get("keyFeatures") or []
@@ -224,7 +236,7 @@ def generate_concept_card_image(
     on_accent_initial = _on_accent_ink(accent_rgb)
 
     # Right Badge: Concept Archetype pill (styled with dynamic brand accent on opaque dark tint)
-    badge_label = "AI Copilot" if mockup_type == "ai_copilot" else "VIP Vault" if mockup_type == "knowledge_hub" else "MVP Ready"
+    badge_label = "AI Copilot" if variant_idx == 1 else "VIP Vault" if variant_idx == 2 else "Workflow OS"
     badge_w = 98 * scale
     badge_h = 22 * scale
     badge_x = W - pad - 20 * scale - badge_w
@@ -260,15 +272,15 @@ def generate_concept_card_image(
     font_app_name = _get_font(13 * scale, is_bold=True)
     draw.text((av_x + av_r * 2 + 10 * scale, hdr_y + 7 * scale), name, fill=(255, 255, 255, 255), font=font_app_name)
 
-    # Right badge: Live Workspace / Copilot / Vault
-    ws_label = "AI Copilot Engine" if mockup_type == "ai_copilot" else "VIP Mastermind Vault" if mockup_type == "knowledge_hub" else "Live Workspace"
-    ws_w = 128 * scale
+    # Right badge: Live Workspace / Copilot Studio / Member Hub
+    ws_label = "Copilot Studio" if variant_idx == 1 else "Member Hub" if variant_idx == 2 else "Live Workspace"
+    ws_w = 118 * scale
     ws_h = 24 * scale
     ws_x = dash_x2 - 16 * scale - ws_w
     ws_y = hdr_y + 4 * scale
     draw.rounded_rectangle([ws_x, ws_y, ws_x + ws_w, ws_y + ws_h], radius=6 * scale, fill=(*ws_fill_rgb, 255), outline=(*accent_rgb, 255), width=1 * scale)
     font_ws = _get_font(9 * scale, is_mono=True)
-    draw.text((ws_x + 10 * scale, ws_y + 6 * scale), ws_label, fill=ws_text_rgba, font=font_ws)
+    draw.text((ws_x + 12 * scale, ws_y + 6 * scale), ws_label, fill=ws_text_rgba, font=font_ws)
 
     # Divider under header
     hdr_div_y = dash_y1 + 44 * scale
@@ -277,89 +289,184 @@ def generate_concept_card_image(
     # Content Area below header
     body_y1 = hdr_div_y + 10 * scale
     body_y2 = dash_y2 - 12 * scale
+    body_x1 = dash_x1 + 12 * scale
+    body_x2 = dash_x2 - 12 * scale
 
-    # Left Sidebar (real key features when available, else archetype nav)
-    side_w = 240 * scale if features_list else 125 * scale
-    side_x1 = dash_x1 + 12 * scale
-    side_x2 = side_x1 + side_w
-    draw.rounded_rectangle([side_x1, body_y1, side_x2, body_y2], radius=10 * scale, fill=(*side_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
+    def _clip_label(txt: str, limit: int = 24) -> str:
+        t = str(txt or "").strip()
+        return t if len(t) <= limit else t[: limit - 1].rstrip(" &-,/") + "…"
 
-    font_nav = _get_font(10 * scale if features_list else 11 * scale, is_bold=True)
-    if features_list:
-        row_h = (body_y2 - body_y1 - 12 * scale) / max(len(features_list), 1)
-        for idx, feat in enumerate(features_list):
-            fy1 = body_y1 + 6 * scale + idx * row_h + 2 * scale
-            fy2 = body_y1 + 6 * scale + (idx + 1) * row_h - 2 * scale
-            if idx == 0:
-                draw.rounded_rectangle(
-                    [side_x1 + 8 * scale, fy1, side_x2 - 8 * scale, fy2],
-                    radius=6 * scale,
-                    fill=(*active_pill_rgb, 255),
-                    outline=(*accent_rgb, 255),
-                    width=1 * scale,
-                )
-            mid_y = (fy1 + fy2) / 2
-            dot_c = (*accent_rgb, 255) if idx == 0 else (148, 163, 184, 255)
-            draw.ellipse([side_x1 + 16 * scale, mid_y - 3 * scale, side_x1 + 22 * scale, mid_y + 3 * scale], fill=dot_c)
-            short_f = feat if len(feat) <= 24 else feat[:23].rstrip(" &-,/") + "…"
-            draw.text((side_x1 + 28 * scale, mid_y - 6 * scale), short_f, fill=(255, 255, 255, 255) if idx == 0 else (203, 213, 225, 255), font=font_nav)
+    card_surface_rgb = (20, 28, 46)
+    font_nav = _get_font(10 * scale, is_bold=True)
+    font_mono_sm = _get_font(9 * scale, is_mono=True)
+    font_sub_sm = _get_font(9 * scale)
+
+    if variant_idx == 1:
+        # VARIANT 1: AI Copilot Prompt Bar + Context Panel + Trajectory Output Studio
+        cmd_h = 30 * scale
+        cmd_y2 = body_y1 + cmd_h
+        draw.rounded_rectangle([body_x1, body_y1, body_x2, cmd_y2], radius=8 * scale, fill=(*chart_bg_rgb, 255), outline=(*accent_rgb, 255), width=1 * scale)
+        prompt_text = _clip_label(tagline or f"Generate {name} launch deliverable", 52)
+        draw.text((body_x1 + 12 * scale, body_y1 + 8 * scale), ">", fill=accent_text_chart, font=font_mono_sm)
+        draw.text((body_x1 + 26 * scale, body_y1 + 8 * scale), prompt_text, fill=(241, 245, 249, 255), font=font_nav)
+        run_w = 56 * scale
+        draw.rounded_rectangle([body_x2 - run_w - 6 * scale, body_y1 + 5 * scale, body_x2 - 6 * scale, cmd_y2 - 5 * scale], radius=5 * scale, fill=(*accent_rgb, 255))
+        draw.text((body_x2 - run_w + 8 * scale, body_y1 + 8 * scale), "Run", fill=on_accent_initial, font=font_mono_sm)
+
+        studio_y1 = cmd_y2 + 10 * scale
+        ctx_w = 216 * scale
+        ctx_x2 = body_x1 + ctx_w
+        draw.rounded_rectangle([body_x1, studio_y1, ctx_x2, body_y2], radius=10 * scale, fill=(*side_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
+        draw.text((body_x1 + 12 * scale, studio_y1 + 10 * scale), "CONTEXT INPUTS", fill=accent_text_panel, font=font_mono_sm)
+
+        ctx_items = features_list[:3] if features_list else ["Audience Prompts", "Voice & Tone Spec", "Asset Templates"]
+        row_h = (body_y2 - (studio_y1 + 30 * scale) - 8 * scale) / max(len(ctx_items), 1)
+        for idx, feat in enumerate(ctx_items):
+            ry1 = studio_y1 + 30 * scale + idx * row_h + 2 * scale
+            ry2 = studio_y1 + 30 * scale + (idx + 1) * row_h - 3 * scale
+            is_act = idx == 0
+            draw.rounded_rectangle(
+                [body_x1 + 8 * scale, ry1, ctx_x2 - 8 * scale, ry2],
+                radius=6 * scale,
+                fill=(*active_pill_rgb, 255) if is_act else (*card_surface_rgb, 255),
+                outline=(*accent_rgb, 255) if is_act else (38, 49, 68, 255),
+                width=1 * scale,
+            )
+            mid_y = (ry1 + ry2) / 2
+            draw.text((body_x1 + 16 * scale, mid_y - 6 * scale), _clip_label(feat, 22), fill=(255, 255, 255, 255) if is_act else (203, 213, 225, 255), font=font_nav)
+
+        out_x1 = ctx_x2 + 12 * scale
+        draw.rounded_rectangle([out_x1, studio_y1, body_x2, body_y2], radius=10 * scale, fill=(*chart_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
+        out_title = _clip_label(features_list[3] if len(features_list) > 3 else f"{name} Output Stream", 28)
+        draw.text((out_x1 + 14 * scale, studio_y1 + 10 * scale), out_title, fill=(241, 245, 249, 255), font=_get_font(11 * scale, is_bold=True))
+        draw.text((body_x2 - 96 * scale, studio_y1 + 11 * scale), "Sample Preview", fill=accent_text_chart, font=font_mono_sm)
+
+        # Output summary skeleton blocks + smooth trajectory polyline (no histogram bars)
+        draw.rounded_rectangle([out_x1 + 14 * scale, studio_y1 + 34 * scale, body_x2 - 14 * scale, studio_y1 + 58 * scale], radius=6 * scale, fill=(*card_surface_rgb, 255), outline=(38, 49, 68, 255), width=1 * scale)
+        draw.rounded_rectangle([out_x1 + 22 * scale, studio_y1 + 42 * scale, out_x1 + 148 * scale, studio_y1 + 50 * scale], radius=3 * scale, fill=(*bar_soft_rgb, 255))
+        draw.rounded_rectangle([out_x1 + 158 * scale, studio_y1 + 42 * scale, body_x2 - 24 * scale, studio_y1 + 50 * scale], radius=3 * scale, fill=(51, 65, 85, 255))
+
+        pts = []
+        curve_x1 = out_x1 + 18 * scale
+        curve_x2 = body_x2 - 18 * scale
+        curve_y_bot = body_y2 - 28 * scale
+        curve_y_top = studio_y1 + 74 * scale
+        ratios = [0.18, 0.34, 0.29, 0.56, 0.64, 0.88]
+        for i, rv in enumerate(ratios):
+            px = curve_x1 + (curve_x2 - curve_x1) * (i / (len(ratios) - 1))
+            py = curve_y_bot - rv * (curve_y_bot - curve_y_top)
+            pts.append((px, py))
+        draw.line([(curve_x1, curve_y_bot), (curve_x2, curve_y_bot)], fill=(38, 49, 68, 255), width=1 * scale)
+        draw.line(pts, fill=(*accent_rgb, 255), width=3 * scale)
+        for i, (px, py) in enumerate(pts):
+            r = 4 * scale if i == len(pts) - 1 else 3 * scale
+            dot_fill = (255, 255, 255, 255) if i == len(pts) - 1 else (*accent_rgb, 255)
+            draw.ellipse([px - r, py - r, px + r, py + r], fill=dot_fill, outline=(*accent_rgb, 255), width=1 * scale)
+        draw.text((out_x1 + 14 * scale, body_y2 - 18 * scale), "Sample data, for illustration", fill=(148, 163, 184, 255), font=font_mono_sm)
+
+    elif variant_idx == 2:
+        # VARIANT 2: Member Vault & Cohort Hub (Top Filter Tabs + 2x2 Vault Grid Tiles)
+        tabs_y2 = body_y1 + 26 * scale
+        tab_labels = ["All Modules", "Playbooks", "Live Calls", "Peers"]
+        tx = body_x1
+        for idx, tlabel in enumerate(tab_labels):
+            tw = (len(tlabel) * 6.4 + 22) * scale
+            is_act = idx == 0
+            draw.rounded_rectangle(
+                [tx, body_y1, tx + tw, tabs_y2],
+                radius=6 * scale,
+                fill=(*active_pill_rgb, 255) if is_act else (*side_bg_rgb, 255),
+                outline=(*accent_rgb, 255) if is_act else (30, 41, 59, 255),
+                width=1 * scale,
+            )
+            draw.text((tx + 11 * scale, body_y1 + 6 * scale), tlabel, fill=(255, 255, 255, 255) if is_act else (148, 163, 184, 255), font=font_mono_sm)
+            tx += tw + 8 * scale
+
+        grid_y1 = tabs_y2 + 10 * scale
+        grid_y2 = body_y2 - 22 * scale
+        col_gap = 10 * scale
+        row_gap = 10 * scale
+        tile_w = (body_x2 - body_x1 - col_gap) / 2
+        tile_h = (grid_y2 - grid_y1 - row_gap) / 2
+        vault_items = features_list[:4] if features_list else [
+            "Core Resource Vault",
+            "Weekly Live Coaching",
+            "Private Peer Network",
+            "Verified Playbook Pack",
+        ]
+        while len(vault_items) < 4:
+            vault_items.append(f"{name} Module {len(vault_items) + 1}")
+
+        for idx, feat in enumerate(vault_items[:4]):
+            c = idx % 2
+            r = idx // 2
+            vx1 = body_x1 + c * (tile_w + col_gap)
+            vy1 = grid_y1 + r * (tile_h + row_gap)
+            vx2 = vx1 + tile_w
+            vy2 = vy1 + tile_h
+            is_act = idx == 0
+            draw.rounded_rectangle(
+                [vx1, vy1, vx2, vy2],
+                radius=9 * scale,
+                fill=(*active_pill_rgb, 255) if is_act else (*side_bg_rgb, 255),
+                outline=(*accent_rgb, 255) if is_act else (38, 49, 68, 255),
+                width=1 * scale,
+            )
+            # Top accent bar inside tile
+            draw.rounded_rectangle([vx1 + 12 * scale, vy1 + 10 * scale, vx1 + 42 * scale, vy1 + 14 * scale], radius=2 * scale, fill=(*accent_rgb, 255) if is_act else (*bar_soft_rgb, 255))
+            tag = f"0{idx + 1} • INCLUDED"
+            draw.text((vx2 - 86 * scale, vy1 + 8 * scale), tag, fill=accent_text_panel if not is_act else (255, 255, 255, 255), font=font_mono_sm)
+            draw.text((vx1 + 12 * scale, vy1 + 26 * scale), _clip_label(feat, 25), fill=(255, 255, 255, 255) if is_act else (226, 232, 240, 255), font=font_nav)
+            sub_line = _clip_label(tagline or "Member-only access & templates", 32)
+            draw.text((vx1 + 12 * scale, vy1 + 44 * scale), sub_line, fill=(203, 213, 225, 255) if is_act else (148, 163, 184, 255), font=font_sub_sm)
+
+        draw.text((body_x1, body_y2 - 14 * scale), "Sample data, for illustration", fill=(148, 163, 184, 255), font=font_mono_sm)
+        draw.text((body_x2 - 110 * scale, body_y2 - 14 * scale), "Cohort Vault Spec", fill=accent_text_chart, font=font_mono_sm)
+
     else:
-        if mockup_type == "ai_copilot":
-            nav_items = [
-                ("Copilot", (*accent_rgb,), True),
-                ("Prompts", (251, 191, 36), False),
-                ("Outputs", (148, 163, 184), False),
-            ]
-        elif mockup_type == "knowledge_hub":
-            nav_items = [
-                ("Vault", (*accent_rgb,), True),
-                ("Calls", (251, 191, 36), False),
-                ("Presets", (148, 163, 184), False),
-            ]
-        else:
-            nav_items = [
-                ("Dash", (*accent_rgb,), True),
-                ("Tasks", (251, 191, 36), False),
-                ("Flows", (148, 163, 184), False),
-            ]
+        # VARIANT 0: 3-Column Workflow & Sprint Pipeline Board
+        col_gap = 10 * scale
+        col_w = (body_x2 - body_x1 - 2 * col_gap) / 3
+        board_y2 = body_y2 - 26 * scale
+        cols = [
+            ("01 QUEUE", features_list[0] if len(features_list) > 0 else "Core Workflow Setup", "Intake Trigger", True),
+            ("02 AUTOMATED", features_list[1] if len(features_list) > 1 else "Asset Pipeline", features_list[2] if len(features_list) > 2 else "Auto-Routing", False),
+            ("03 DELIVERED", features_list[3] if len(features_list) > 3 else "Client Handoff", "One-Click Publish", False),
+        ]
+        for idx, (col_hdr, card_a, card_b, is_focus) in enumerate(cols):
+            cx1 = body_x1 + idx * (col_w + col_gap)
+            cx2 = cx1 + col_w
+            draw.rounded_rectangle([cx1, body_y1, cx2, board_y2], radius=9 * scale, fill=(*side_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
+            draw.text((cx1 + 10 * scale, body_y1 + 9 * scale), col_hdr, fill=accent_text_panel if is_focus else (148, 163, 184, 255), font=font_mono_sm)
 
-        nav_h = (body_y2 - body_y1) / 3
-        for idx, (label, color, is_active) in enumerate(nav_items):
-            ny = body_y1 + idx * nav_h + (nav_h / 2) - 8 * scale
-            draw.ellipse([side_x1 + 16 * scale, ny + 4 * scale, side_x1 + 24 * scale, ny + 12 * scale], fill=color)
-            draw.text((side_x1 + 32 * scale, ny), label, fill=(241, 245, 249) if is_active else (148, 163, 184), font=font_nav)
+            # Primary card in column
+            c1_y1 = body_y1 + 28 * scale
+            c1_y2 = c1_y1 + 58 * scale
+            draw.rounded_rectangle(
+                [cx1 + 8 * scale, c1_y1, cx2 - 8 * scale, c1_y2],
+                radius=7 * scale,
+                fill=(*active_pill_rgb, 255) if is_focus else (*card_surface_rgb, 255),
+                outline=(*accent_rgb, 255) if is_focus else (38, 49, 68, 255),
+                width=1 * scale,
+            )
+            draw.ellipse([cx1 + 16 * scale, c1_y1 + 13 * scale, cx1 + 22 * scale, c1_y1 + 19 * scale], fill=(*accent_rgb, 255) if is_focus else (148, 163, 184, 255))
+            draw.text((cx1 + 28 * scale, c1_y1 + 10 * scale), _clip_label(card_a, 17), fill=(255, 255, 255, 255), font=font_nav)
+            draw.rounded_rectangle([cx1 + 16 * scale, c1_y1 + 36 * scale, cx2 - 36 * scale, c1_y1 + 43 * scale], radius=3 * scale, fill=(*bar_soft_rgb, 255) if is_focus else (51, 65, 85, 255))
 
-    # Right Chart Area
-    chart_x1 = side_x2 + 12 * scale
-    chart_x2 = dash_x2 - 12 * scale
-    draw.rounded_rectangle([chart_x1, body_y1, chart_x2, body_y2], radius=10 * scale, fill=(*chart_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
+            # Secondary card in column
+            c2_y1 = c1_y2 + 8 * scale
+            c2_y2 = board_y2 - 10 * scale
+            draw.rounded_rectangle([cx1 + 8 * scale, c2_y1, cx2 - 8 * scale, c2_y2], radius=7 * scale, fill=(*chart_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
+            draw.text((cx1 + 16 * scale, c2_y1 + 12 * scale), _clip_label(card_b, 19), fill=(203, 213, 225, 255), font=font_sub_sm)
+            draw.rounded_rectangle([cx1 + 16 * scale, c2_y1 + 30 * scale, cx2 - 48 * scale, c2_y1 + 36 * scale], radius=3 * scale, fill=(51, 65, 85, 255))
 
-    chart_hdr_y = body_y1 + 12 * scale
-    chart_title = (features_list[1][:26] + ("…" if len(features_list[1]) > 26 else "")) if len(features_list) > 1 else ("Copilot Workspace" if mockup_type == "ai_copilot" else "Member Vault" if mockup_type == "knowledge_hub" else "Workflow Overview")
-    draw.text((chart_x1 + 16 * scale, chart_hdr_y), chart_title, fill=(226, 232, 240, 255), font=_get_font(11 * scale, is_bold=True))
-    right_badge = "Sample Preview" if features_list else "Illustration"
-    rb_font = _get_font(9 * scale, is_mono=True)
-    rb_w = draw.textlength(right_badge, font=rb_font) if hasattr(draw, "textlength") else 80 * scale
-    draw.text((chart_x2 - 14 * scale - rb_w, chart_hdr_y + 1 * scale), right_badge, fill=accent_text_chart, font=rb_font)
-
-    # Sample bars (illustrative opaque shapes only, no invented numbers)
-    chart_base_y = body_y2 - 34 * scale
-    chart_top_y = body_y1 + 46 * scale
-    chart_span_w = chart_x2 - chart_x1 - 32 * scale
-
-    bar_ratios = [0.34, 0.52, 0.44, 0.68, 0.56, 0.84, 0.72]
-    bar_gap = 8 * scale
-    bar_w = max(8 * scale, (chart_span_w - bar_gap * (len(bar_ratios) - 1)) / len(bar_ratios))
-    for i, r in enumerate(bar_ratios):
-        bx1 = chart_x1 + 16 * scale + i * (bar_w + bar_gap)
-        bx2 = bx1 + bar_w
-        bh = r * (chart_base_y - chart_top_y)
-        by1 = chart_base_y - bh
-        b_fill = (*accent_rgb, 255) if i >= len(bar_ratios) - 2 else (*bar_soft_rgb, 255)
-        draw.rounded_rectangle([bx1, by1, bx2, chart_base_y], radius=4 * scale, fill=b_fill)
-
-    chart_ftr_y = body_y2 - 20 * scale
-    draw.text((chart_x1 + 16 * scale, chart_ftr_y), "Sample data, for illustration", fill=(148, 163, 184, 255), font=_get_font(9 * scale, is_mono=True))
+        # Bottom horizontal milestone bar
+        bar_y1 = board_y2 + 8 * scale
+        bar_y2 = body_y2 - 2 * scale
+        draw.rounded_rectangle([body_x1, bar_y1, body_x2, bar_y2], radius=6 * scale, fill=(*chart_bg_rgb, 255), outline=(30, 41, 59, 255), width=1 * scale)
+        prog_w = int((body_x2 - body_x1 - 150 * scale) * 0.62)
+        draw.rounded_rectangle([body_x1 + 8 * scale, bar_y1 + 5 * scale, body_x1 + 8 * scale + prog_w, bar_y2 - 5 * scale], radius=4 * scale, fill=(*accent_rgb, 255))
+        draw.text((body_x2 - 134 * scale, bar_y1 + 3 * scale), "Sample Preview", fill=(148, 163, 184, 255), font=font_mono_sm)
 
     # 4. 3 Detail Highlights Cards (no invented numbers)
     cards_y1 = 350 * scale

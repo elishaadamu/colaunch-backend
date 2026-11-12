@@ -92,13 +92,60 @@ def _sanitize_brand_hex(raw: Any, fallback: str = CRIMSON) -> str:
     return f"#{h.upper()}"
 
 
-def _contrast_ink(hex_color: str) -> str:
+def _hex_luminance(hex_color: str) -> float:
     h = _sanitize_brand_hex(hex_color).lstrip("#")
     r, g, b = (int(h[i:i+2], 16) / 255.0 for i in (0, 2, 4))
     def lin(c: float) -> float:
         return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-    lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
-    return INK if lum > 0.42 else WHITE
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+
+def _contrast_ink(hex_color: str) -> str:
+    lum = _hex_luminance(hex_color)
+    lum_ink = _hex_luminance(INK)
+    ratio_white = 1.05 / (lum + 0.05)
+    ratio_ink = (lum + 0.05) / (lum_ink + 0.05)
+    return INK if ratio_ink >= ratio_white else WHITE
+
+
+def _safe_button_pair(hex_color: str, min_ratio: float = 4.5) -> tuple:
+    """Return (bg_hex, text_hex) guaranteed to meet min_ratio WCAG contrast."""
+    bg = _sanitize_brand_hex(hex_color)
+    ink = _contrast_ink(bg)
+    lum_bg = _hex_luminance(bg)
+    lum_txt = _hex_luminance(ink)
+    ratio = (max(lum_bg, lum_txt) + 0.05) / (min(lum_bg, lum_txt) + 0.05)
+    if ratio >= min_ratio:
+        return (bg, ink)
+    r, g, b = (int(bg[i:i+2], 16) for i in (1, 3, 5))
+    for step in range(1, 20):
+        t = step / 19.0
+        nr = int(round(r * (1.0 - t) + 15 * t))
+        ng = int(round(g * (1.0 - t) + 23 * t))
+        nb = int(round(b * (1.0 - t) + 42 * t))
+        cand = f"#{nr:02X}{ng:02X}{nb:02X}"
+        cand_lum = _hex_luminance(cand)
+        if 1.05 / (cand_lum + 0.05) >= min_ratio:
+            return (cand, WHITE)
+    return (INK, WHITE)
+
+
+def _safe_accent_on_light(hex_color: str, bg_hex: str = WHITE, min_ratio: float = 4.5) -> str:
+    """Darken bright accents when used for small text/bullets on light cards so contrast is always >= min_ratio."""
+    cleaned = _sanitize_brand_hex(hex_color)
+    bg_lum = _hex_luminance(bg_hex)
+    r, g, b = (int(cleaned[i:i+2], 16) for i in (1, 3, 5))
+    for step in range(20):
+        t = step / 19.0
+        nr = int(round(r * (1.0 - t) + 15 * t))
+        ng = int(round(g * (1.0 - t) + 23 * t))
+        nb = int(round(b * (1.0 - t) + 42 * t))
+        cand = f"#{nr:02X}{ng:02X}{nb:02X}"
+        cand_lum = _hex_luminance(cand)
+        ratio = (max(cand_lum, bg_lum) + 0.05) / (min(cand_lum, bg_lum) + 0.05)
+        if ratio >= min_ratio:
+            return cand
+    return INK
 
 
 def _concept_slug(name: str, index: int = 0) -> str:
@@ -415,6 +462,7 @@ def _build_concept_card_image_url(
     concept: Dict[str, Any],
     accent_hex: str,
     features: List[str],
+    index: int = 0,
 ) -> str:
     """Build deterministic backend concept preview PNG URL with real features & branding."""
     from urllib.parse import urlencode
@@ -435,17 +483,23 @@ def _build_concept_card_image_url(
     else:
         public_backend = backend_base
 
+    def _with_variant(u: str) -> str:
+        if "/api/outreach/concept-card-image" in u and "variant=" not in u:
+            sep = "&" if "?" in u else "?"
+            return f"{u}{sep}variant={index}"
+        return u
+
     if isinstance(raw_img, str) and raw_img.strip():
         clean = raw_img.strip()
         if clean.startswith("/api/"):
-            return f"{public_backend}{clean}"
+            return _with_variant(f"{public_backend}{clean}")
         if clean.startswith("/"):
             return f"{_get_frontend_base()}{clean}"
         if clean.startswith("http"):
             # If frontend accidentally prefixed /api/outreach/concept-card-image with Vercel origin, rewrite to backend
             if "/api/outreach/concept-card-image" in clean:
                 path_part = clean[clean.index("/api/outreach/concept-card-image"):]
-                return f"{public_backend}{path_part}"
+                return _with_variant(f"{public_backend}{path_part}")
             return clean
 
     app_name = str(concept.get("name") or concept.get("title") or "Software Concept").strip()
@@ -459,6 +513,7 @@ def _build_concept_card_image_url(
         "pricing": str(concept.get("pricing") or "$29/mo Starter • $79/mo Pro")[:50],
         "brand_color": accent_hex,
         "mockup_type": str(concept.get("mockupType") or "saas_os"),
+        "variant": str(index),
     }
     return f"{public_backend}/api/outreach/concept-card-image?{urlencode(params)}"
 
@@ -478,7 +533,8 @@ def _render_single_concept_block(
         concept.get("brandColor") or concept.get("brand_color") or concept.get("accentColor"),
         fallback=default_cycle[index % len(default_cycle)],
     )
-    accent_ink = _contrast_ink(accent_hex)
+    btn_bg, accent_ink = _safe_button_pair(accent_hex, 4.5)
+    accent_on_light = _safe_accent_on_light(accent_hex, WHITE, 4.5)
 
     app_name = str(concept.get("name") or concept.get("title") or f"Software Concept {index + 1}").strip()
     tagline = str(concept.get("tagline") or concept.get("summary") or "").strip()
@@ -501,17 +557,19 @@ def _render_single_concept_block(
     raw_features = concept.get("keyFeatures") or concept.get("features") or concept.get("coreFeatures") or []
     key_features = [str(f).strip() for f in raw_features if str(f).strip()][:4] if isinstance(raw_features, list) else []
 
-    landing_url = _build_concept_landing_url(concept, creator_name, index)
-    select_url = f"{landing_url}{'&' if '?' in landing_url else '?'}choose=1"
-    concept_img = _build_concept_card_image_url(concept, accent_hex, key_features)
+    concept_img = _build_concept_card_image_url(concept, accent_hex, key_features, index=index)
 
     contact_email = get_contact_reply_email()
     mailto_subj = quote(f"Interested in Concept {index + 1}: {app_name}")
-    mailto_body = quote(f"Hi CoLaunch team,\n\nI'd like to explore Concept {index + 1} ({app_name}) and review next steps.")
+    mailto_body = quote(
+        f"Hi CoLaunch team,\n\n"
+        f"I'd like to select Concept {index + 1}: {app_name} and review next steps.\n\n"
+        f"[CF-STAGE:STEP6_PITCH | Concept {index + 1}: {app_name}]"
+    )
     mailto_href = f"mailto:{contact_email}?subject={mailto_subj}&body={mailto_body}"
 
     tagline_html = (
-        f'<div style="font-family:{F_BODY};font-size:15px;color:#CBD5E1;margin-top:6px;line-height:1.45;">'
+        f'<div style="font-family:{F_BODY};font-size:15px;color:#E2E8F0;margin-top:6px;line-height:1.45;">'
         f'{html.escape(tagline)}</div>'
         if tagline else ""
     )
@@ -520,17 +578,16 @@ def _render_single_concept_block(
     if concept_img:
         img_html = (
             '<div style="margin:0 0 18px 0;">'
-            f'<a href="{html.escape(landing_url, quote=True)}" target="_blank" style="text-decoration:none;display:block;">'
             f'<img src="{html.escape(concept_img)}" alt="{html.escape(app_name)} preview" width="520" '
             f'style="width:100%;max-width:520px;height:auto;border-radius:10px;border:2px solid {INK};display:block;" />'
-            '</a></div>'
+            '</div>'
         )
 
     problem_html = ""
     if problem:
         problem_html = (
-            f'<div style="margin:0 0 14px 0;padding:12px 14px;background-color:{PAPER};border-left:4px solid {accent_hex};border-radius:6px;">'
-            f'<div style="font-family:{F_TYPE};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:{MUTED};margin-bottom:3px;">Problem it solves</div>'
+            f'<div style="margin:0 0 14px 0;padding:12px 14px;background-color:{PAPER};border-left:4px solid {accent_on_light};border-radius:6px;">'
+            f'<div style="font-family:{F_TYPE};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:{INK};margin-bottom:3px;">Problem it solves</div>'
             f'<div style="color:{BODY_TXT};font-size:14px;line-height:1.55;">{html.escape(problem)}</div>'
             '</div>'
         )
@@ -539,14 +596,14 @@ def _render_single_concept_block(
     if key_features:
         items = "".join(
             '<tr>'
-            f'<td width="16" valign="top" style="width:16px;padding:3px 8px 6px 0;color:{accent_hex};font-weight:700;font-size:14px;line-height:1.4;">&#9679;</td>'
+            f'<td width="16" valign="top" style="width:16px;padding:3px 8px 6px 0;color:{accent_on_light};font-weight:700;font-size:14px;line-height:1.4;">&#9679;</td>'
             f'<td valign="top" style="padding:0 0 6px 0;color:{BODY_TXT};font-size:14px;line-height:1.5;">{html.escape(f)}</td>'
             '</tr>'
             for f in key_features
         )
         features_html = (
             '<div style="margin:0 0 14px 0;">'
-            f'<div style="font-family:{F_TYPE};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:{MUTED};margin-bottom:6px;">What you get inside</div>'
+            f'<div style="font-family:{F_TYPE};font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:{INK};margin-bottom:6px;">What you get inside</div>'
             f'<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">{items}</table>'
             '</div>'
         )
@@ -561,7 +618,7 @@ def _render_single_concept_block(
             )
         if audience_evidence:
             aud_rows.append(
-                f'<div style="font-size:13px;color:{MUTED};line-height:1.5;">'
+                f'<div style="font-size:13px;color:{BODY_TXT};line-height:1.5;">'
                 f'<strong style="color:{INK};">Audience signal:</strong> {html.escape(audience_evidence)}</div>'
             )
         audience_html = (
@@ -574,13 +631,13 @@ def _render_single_concept_block(
         f'<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" '
         f'style="margin:6px 0 0 0;background-color:{PAPER};border:1.5px solid {RULE};border-radius:8px;"><tr>'
         f'<td class="stack" valign="top" style="padding:10px 12px;">'
-        f'<div style="font-family:{F_TYPE};font-size:10px;text-transform:uppercase;color:{MUTED};">Pricing</div>'
+        f'<div style="font-family:{F_TYPE};font-size:10px;text-transform:uppercase;color:{INK};">Pricing</div>'
         f'<div style="font-size:13px;font-weight:700;color:{INK};margin-top:3px;">{html.escape(pricing)}</div></td>'
         f'<td class="stack stack-gap" valign="top" style="padding:10px 12px;">'
-        f'<div style="font-family:{F_TYPE};font-size:10px;text-transform:uppercase;color:{MUTED};">Timeline &amp; split</div>'
-        f'<div style="font-size:13px;font-weight:700;color:{INK};margin-top:3px;">{html.escape(mvp_difficulty)} &bull; 50/50 split</div></td>'
+        f'<div style="font-family:{F_TYPE};font-size:10px;text-transform:uppercase;color:{INK};">Timeline &amp; split</div>'
+        f'<div style="font-size:13px;font-weight:700;color:{INK};margin-top:3px;">{html.escape(mvp_difficulty)} &bull; {html.escape(revenue_model)}</div></td>'
         f'<td class="stack stack-gap" valign="top" align="right" style="padding:10px 12px;text-align:right;">'
-        f'<div style="font-family:{F_TYPE};font-size:10px;text-transform:uppercase;color:{MUTED};">Audience fit</div>'
+        f'<div style="font-family:{F_TYPE};font-size:10px;text-transform:uppercase;color:{INK};">Audience fit</div>'
         f'<div style="font-family:{F_HEAD};font-size:19px;font-weight:700;color:{TEAL};margin-top:2px;">{score}/100</div></td>'
         '</tr></table>'
     )
@@ -593,7 +650,7 @@ def _render_single_concept_block(
         # dark header matching ConceptLandingPage aesthetic
         f'<tr><td bgcolor="#10131A" style="background-color:#10131A;padding:18px 20px;border-bottom:3px dashed {accent_hex};">'
         '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0"><tr>'
-        f'<td align="left" valign="middle">{_tag(f"Concept {index + 1} of {total_concepts}", bg=accent_hex, color=accent_ink, border=accent_hex)}</td>'
+        f'<td align="left" valign="middle">{_tag(f"Concept {index + 1} of {total_concepts}", bg=btn_bg, color=accent_ink, border=btn_bg)}</td>'
         f'<td align="right" valign="middle" style="font-family:{F_TYPE};font-size:11px;font-weight:700;color:#6FCF9B;">Fit {score}/100</td>'
         '</tr></table>'
         f'<div style="font-family:{F_HEAD};font-size:24px;font-weight:700;color:{WHITE};margin-top:10px;line-height:1.2;">'
@@ -605,14 +662,10 @@ def _render_single_concept_block(
         f'{img_html}{problem_html}{features_html}{audience_html}{stats}'
         f'{_dash_rule(RULE, "16px 0 16px 0")}'
         '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0"><tr>'
-        f'<td class="stack btn-full" valign="middle">{_button(landing_url, "View live landing page &rarr;", bg=accent_hex, color=accent_ink)}</td>'
-        f'<td class="stack stack-gap" align="right" valign="middle" style="text-align:right;">'
-        f'<a href="{html.escape(select_url, quote=True)}" target="_blank" style="font-family:{F_BODY};font-size:13px;font-weight:700;color:{INK};text-decoration:underline;">'
-        f'Select Concept {index + 1} &rarr;</a></td>'
+        f'<td class="stack btn-full" valign="middle">{_button(mailto_href, f"Select Concept {index + 1}: {html.escape(app_name)} &rarr;", bg=btn_bg, color=accent_ink)}</td>'
+        f'<td class="stack stack-gap" align="right" valign="middle" style="text-align:right;font-size:12px;color:{BODY_TXT};">'
+        f'Or reply <strong style="color:{INK};">&ldquo;Concept {index + 1}&rdquo;</strong> to proceed</td>'
         '</tr></table>'
-        f'<div style="font-size:12px;color:{MUTED};margin-top:12px;word-break:break-all;line-height:1.5;">'
-        f'Landing page: <a href="{html.escape(landing_url, quote=True)}" target="_blank" '
-        f'style="color:{CRIMSON};text-decoration:underline;">{html.escape(landing_url)}</a></div>'
         '</td></tr></table>'
     )
 
@@ -640,7 +693,7 @@ def render_concept_showcase_html(
         'Software Concepts Proposed for Your Audience</div>'
         f'<div style="font-size:13px;color:{INK};margin-top:5px;line-height:1.5;">'
         f'Below are the top {total_count} custom software concept{plural} designed for your community '
-        '— each includes full details and a live branded landing page to review.</div>'
+        '— each includes a visual product preview and full concept breakdown below.</div>'
         '</div>'
     )
 
@@ -792,21 +845,10 @@ def convert_markdown_to_clean_html(markdown_text: str) -> str:
         raw_html
     )
 
-    # "Landing Page: <link>" lines become a ticket-style CTA (wrapper tag regex now tolerates inline styles)
-    def _style_landing_page_cta(m):
-        url = m.group(1)
-        return (
-            f'<div style="margin:14px 0 18px 0;padding:14px 16px;background-color:{WHITE};border:2px solid {INK};border-radius:10px;">'
-            f'<div style="font-family:{F_TYPE};font-size:11px;font-weight:700;color:{MUTED};margin-bottom:8px;">Interactive concept preview</div>'
-            f'{_button(url, "Review live concept &amp; landing page")}'
-            f'<div style="font-size:12px;color:{MUTED};word-break:break-all;margin-top:10px;">Direct link: '
-            f'<a href="{url}" target="_blank" style="color:{CRIMSON};text-decoration:underline;">{url}</a></div>'
-            '</div>'
-        )
-
+    # Strip any legacy "Landing Page: <link>" lines from markdown so emails show only the inline preview & text
     raw_html = re.sub(
-        r'(?:<p[^>]*>|<li[^>]*>)?(?:•\s*)?(?:Live\s+)?Landing\s+Page:\s*<a\s+href="([^"]+)"[^>]*>(.*?)</a>(?:</p>|</li>)?',
-        _style_landing_page_cta,
+        r'(?:<p[^>]*>|<li[^>]*>)?(?:•\s*)?(?:Live\s+)?(?:interactive\s+)?Landing\s+Page(?:\s*\([^)]*\))?:\s*<a\s+href="[^"]+"[^>]*>.*?</a>(?:</p>|</li>)?',
+        "",
         raw_html,
         flags=re.IGNORECASE
     )
