@@ -43,6 +43,8 @@ _cors_origins = [
     "https://creator-forge-frontend.vercel.app/",
     "https://colaunch-web.vercel.app",
     "https://colaunch-web.vercel.app/",
+    "https://colaunch-2.vercel.app",
+    "https://colaunch-2.vercel.app/",
 ]
 if settings.FRONTEND_URL:
     clean_fe = settings.FRONTEND_URL.rstrip("/")
