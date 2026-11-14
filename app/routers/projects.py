@@ -209,23 +209,19 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
     has_custom_fee = bool(meta_dict.get("hasCustomFee") is True or meta_dict.get("has_custom_fee") is True)
 
     fee_candidate = None
-    if has_custom_fee:
+    if meta_dict.get("diy_fee") is not None:
         fee_candidate = meta_dict.get("diy_fee")
-        if fee_candidate is None:
-            fee_candidate = meta_dict.get("diyFee")
-        if fee_candidate is None:
-            fee_candidate = meta_dict.get("diyPassPrice")
-        if fee_candidate is None and meta_dict.get("diy_subscription"):
-            sub = meta_dict.get("diy_subscription")
-            if isinstance(sub, dict):
-                fee_candidate = sub.get("amount")
-        if fee_candidate is None and meta_dict.get("diySubscription"):
-            sub = meta_dict.get("diySubscription")
-            if isinstance(sub, dict):
-                fee_candidate = sub.get("amount")
+    elif meta_dict.get("diyFee") is not None:
+        fee_candidate = meta_dict.get("diyFee")
+    elif meta_dict.get("diyPassPrice") is not None:
+        fee_candidate = meta_dict.get("diyPassPrice")
+    elif meta_dict.get("diy_subscription") and isinstance(meta_dict.get("diy_subscription"), dict):
+        fee_candidate = meta_dict["diy_subscription"].get("amount")
+    elif meta_dict.get("diySubscription") and isinstance(meta_dict.get("diySubscription"), dict):
+        fee_candidate = meta_dict["diySubscription"].get("amount")
 
     resolved_fee = None
-    if has_custom_fee and fee_candidate is not None:
+    if fee_candidate is not None:
         try:
             resolved_fee = float(fee_candidate)
         except (ValueError, TypeError):
@@ -269,7 +265,7 @@ def _format_project_response(proj: CoLaunchProject) -> Dict[str, Any]:
     meta_dict["diy_fee"] = resolved_fee
     meta_dict["diyFee"] = resolved_fee
     meta_dict["diyPassPrice"] = resolved_fee
-    meta_dict["hasCustomFee"] = has_custom_fee
+    meta_dict["hasCustomFee"] = has_custom_fee or (fee_candidate is not None)
 
     return {
         "id": proj.id,
@@ -623,12 +619,19 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
         if cur_fee is None:
             cur_fee = d["metadataInfo"].get("diyPassPrice")
     fee_to_use = cur_fee if cur_fee is not None else default_fee
+    has_custom = bool(
+        d.get("hasCustomFee") is True or
+        (isinstance(d.get("metadataInfo"), dict) and d["metadataInfo"].get("hasCustomFee") is True) or
+        (cur_fee is not None and cur_fee != default_fee)
+    )
     d["diyFee"] = fee_to_use
     d["diyPassPrice"] = fee_to_use
+    d["hasCustomFee"] = has_custom
     if isinstance(d.get("metadataInfo"), dict):
         d["metadataInfo"]["diy_fee"] = fee_to_use
         d["metadataInfo"]["diyFee"] = fee_to_use
         d["metadataInfo"]["diyPassPrice"] = fee_to_use
+        d["metadataInfo"]["hasCustomFee"] = has_custom
 
     # 1b. Normalize brand color & theme
     brand_col = d.get("brandColor") or d.get("brand_color") or (d.get("selectedConcept") or {}).get("brandColor") or "#c81e3c"
@@ -1671,20 +1674,20 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
         cur_meta["diyOfferSentAt"] = dosa
 
     if "diyFee" in body or "diy_fee" in body or "diyPassPrice" in body or body.get("resetToDefault") or "hasCustomFee" in body or "has_custom_fee" in body:
-        is_reset = bool(body.get("resetToDefault") or body.get("hasCustomFee") is False or body.get("has_custom_fee") is False)
+        is_reset = bool(body.get("resetToDefault"))
         fee_raw = body.get("diyFee") if "diyFee" in body else body.get("diy_fee") if "diy_fee" in body else body.get("diyPassPrice")
-        if is_reset or fee_raw is None or fee_raw == "":
+        if is_reset or (fee_raw is None and body.get("resetToDefault")):
             cur_meta.pop("diy_fee", None)
             cur_meta.pop("diyFee", None)
             cur_meta.pop("diyPassPrice", None)
             cur_meta["hasCustomFee"] = False
-        else:
+        elif fee_raw is not None and fee_raw != "":
             try:
                 fee_val = float(fee_raw)
                 cur_meta["diy_fee"] = fee_val
                 cur_meta["diyFee"] = fee_val
                 cur_meta["diyPassPrice"] = fee_val
-                is_custom = bool(body.get("hasCustomFee") is True or body.get("has_custom_fee") is True or (body.get("hasCustomFee") is None and body.get("has_custom_fee") is None))
+                is_custom = bool(body.get("hasCustomFee") is True or body.get("has_custom_fee") is True)
                 cur_meta["hasCustomFee"] = is_custom
             except (ValueError, TypeError):
                 pass
