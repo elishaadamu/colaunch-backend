@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import re
+import copy
 import asyncio
 import logging
 import uuid
@@ -78,8 +80,12 @@ class CreateProjectRequest(BaseModel):
     keyFeatures: Optional[List[str]] = None
     pricing: Optional[str] = None
     revenueModel: Optional[str] = None
-    presaleTarget: Optional[float] = 12500.0
+    presaleTarget: Optional[float] = None
     selectedConcept: Optional[Dict[str, Any]] = None
+    audienceEvidence: Optional[str] = None
+    mvpDifficulty: Optional[str] = None
+    opportunityScore: Optional[int] = None
+    slug: Optional[str] = None
     mockup: Optional[Dict[str, Any]] = None
     campaign_kit: Optional[Dict[str, Any]] = None
     campaignKit: Optional[Dict[str, Any]] = None
@@ -896,6 +902,11 @@ def _find_mongo_project(project_id: str) -> Optional[Dict[str, Any]]:
                 {"creatorHandle": {"$regex": f"^{clean_target}$", "$options": "i"}},
                 {"creator_handle": project_id},
                 {"creatorHandle": project_id},
+                {"slug": clean_target},
+                {"slug": project_id},
+                {"productSlug": clean_target},
+                {"productSlug": project_id},
+                {"product_slug": clean_target},
             ]})
             if doc:
                 p_id = doc.get("id") or doc.get("_id")
@@ -1041,6 +1052,48 @@ def list_projects(
         return []
 
 
+def _generate_unique_project_slug(coll, base_name: str, creator_handle: str = "", exclude_id: Optional[str] = None) -> str:
+    """Generate a clean, lowercase, URL-safe, collision-free slug."""
+    clean_name = re.sub(r"[^a-z0-9]+", "-", (base_name or "").lower().strip()).strip("-")
+    if not clean_name:
+        clean_name = "venture"
+
+    if coll is None:
+        return clean_name
+
+    candidate = clean_name
+    q = {"$or": [{"slug": candidate}, {"productSlug": candidate}]}
+    if exclude_id:
+        q["id"] = {"$ne": exclude_id}
+        q["_id"] = {"$ne": exclude_id}
+
+    if not coll.find_one(q):
+        return candidate
+
+    clean_handle = re.sub(r"[^a-z0-9]+", "-", (creator_handle or "").lower().lstrip("@").strip()).strip("-")
+    if clean_handle and clean_handle != candidate:
+        cand_handle = f"{candidate}-{clean_handle}"
+        q_h = {"$or": [{"slug": cand_handle}, {"productSlug": cand_handle}]}
+        if exclude_id:
+            q_h["id"] = {"$ne": exclude_id}
+            q_h["_id"] = {"$ne": exclude_id}
+        if not coll.find_one(q_h):
+            return cand_handle
+
+    counter = 2
+    while counter < 1000:
+        cand_num = f"{candidate}-{counter}"
+        q_n = {"$or": [{"slug": cand_num}, {"productSlug": cand_num}]}
+        if exclude_id:
+            q_n["id"] = {"$ne": exclude_id}
+            q_n["_id"] = {"$ne": exclude_id}
+        if not coll.find_one(q_n):
+            return cand_num
+        counter += 1
+
+    return f"{candidate}-{uuid.uuid4().hex[:6]}"
+
+
 def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) -> dict:
     """
     Initialize a new Co-Launch Project from concept directly and exclusively in MongoDB Atlas.
@@ -1085,19 +1138,6 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
                 try: def_fee = float(fee_cand)
                 except Exception: pass
 
-    now_iso = datetime.utcnow().isoformat()
-    concept_data = body.selectedConcept or {}
-    product_name = body.productName or concept_data.get("name") or concept_data.get("title") or "New Co-Launch Venture"
-    product_tagline = body.productTagline or concept_data.get("tagline") or concept_data.get("productTagline") or concept_data.get("description") or body.product_tagline or f"Exclusive software platform and operating system."
-    pricing_str = body.pricing or concept_data.get("pricing") or "$29/mo Starter • $79/mo Pro"
-    if not pricing_str or not pricing_str.strip():
-        pricing_str = "$29/mo Starter • $79/mo Pro"
-    elif pricing_str.strip().startswith("/mo"):
-        pricing_str = f"$29{pricing_str.strip()}"
-    elif "$" not in pricing_str:
-        pricing_str = f"${pricing_str.strip()}"
-    presale_target_val = float(body.presaleTarget or concept_data.get("presaleTarget") or 12500.0)
-
     # Honor custom pass fee if passed explicitly in body
     cand_fee = body.diyFee if body.diyFee is not None else body.diyPassPrice if body.diyPassPrice is not None else body.diy_fee
     if cand_fee is not None:
@@ -1109,58 +1149,135 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
     else:
         has_custom_fee_init = bool(body.hasCustomFee or body.has_custom_fee)
 
+    # 2. Locked project protection: never overwrite an active project that is locked or has real validation data
     if existing_doc:
-        if product_name:
-            existing_doc["productName"] = product_name
-            existing_doc["product_name"] = product_name
-            existing_doc["title"] = product_name
-        if product_tagline:
-            existing_doc["productTagline"] = product_tagline
-            existing_doc["product_tagline"] = product_tagline
-        if pricing_str:
-            existing_doc["pricing"] = pricing_str
-            parsed_pricing = parse_concept_pricing_details(pricing_str)
-            if "validationPlan" in existing_doc and isinstance(existing_doc["validationPlan"], dict):
-                existing_doc["validationPlan"]["pricing"] = pricing_str
-            if "validationCampaign" in existing_doc and isinstance(existing_doc["validationCampaign"], dict):
-                va = existing_doc["validationCampaign"].get("productAssets") or existing_doc["validationCampaign"].get("product_assets") or {}
-                va["pricingConfig"] = parsed_pricing["pricing_config"]
-                va["pricingTiers"] = parsed_pricing["pricing_tiers"]
-                existing_doc["validationCampaign"]["productAssets"] = va
-                existing_doc["validationCampaign"]["product_assets"] = va
-            if "campaignKit" in existing_doc and isinstance(existing_doc["campaignKit"], dict):
-                existing_doc["campaignKit"]["pricingConfig"] = parsed_pricing["pricing_config"]
-        if concept_data:
-            existing_doc["selectedConcept"] = concept_data
-            existing_doc["selected_concept"] = concept_data
-        # Synchronize problem & target audience from chosen concept
-        c_problem = concept_data.get("problem") or body.problem
-        if c_problem:
-            existing_doc["problem"] = c_problem
-        c_customer = concept_data.get("customer") or concept_data.get("demographicAlignment") or body.customer or body.targetAudience
-        if c_customer:
-            existing_doc["targetAudience"] = c_customer
-            existing_doc["target_audience"] = c_customer
-            existing_doc["customer"] = c_customer
+        telem = existing_doc.get("telemetry") or {}
+        has_active_validation = (
+            existing_doc.get("isLocked") is True
+            or existing_doc.get("planLocked") is True
+            or (existing_doc.get("currentPhase") or existing_doc.get("current_phase") or 1) > 1
+            or len(telem.get("reservations") or []) > 0
+            or int(telem.get("visitors") or 0) > 0
+            or existing_doc.get("status") in ("building", "launched")
+        )
+        if has_active_validation:
+            logger.info(f"[execute_create_co_launch_project] Project {existing_doc.get('id')} has active validation / is locked. Preserving existing project without overwriting.")
+            return _normalize_mongo_project_dict(existing_doc, def_fee)
 
-        # Synchronize validationPlan with chosen concept
-        if "validationPlan" in existing_doc and isinstance(existing_doc["validationPlan"], dict):
-            if c_problem:
-                existing_doc["validationPlan"]["problem"] = c_problem
-            if c_customer:
-                existing_doc["validationPlan"]["customer"] = c_customer
-            if product_name and product_tagline:
-                existing_doc["validationPlan"]["offer"] = f"{product_name} Founding Co-Launch Access: {product_tagline}"
+    now_iso = datetime.utcnow().isoformat()
+    concept_data = copy.deepcopy(body.selectedConcept or {})
+    product_name = body.productName or concept_data.get("name") or concept_data.get("title") or "New Co-Launch Venture"
+    product_tagline = body.productTagline or concept_data.get("tagline") or concept_data.get("productTagline") or concept_data.get("description") or body.product_tagline or f"Exclusive software platform and operating system."
+    pricing_str = body.pricing or concept_data.get("pricing") or "$29/mo Starter • $79/mo Pro"
+    if not pricing_str or not pricing_str.strip():
+        pricing_str = "$29/mo Starter • $79/mo Pro"
+    elif pricing_str.strip().startswith("/mo"):
+        pricing_str = f"$29{pricing_str.strip()}"
+    elif "$" not in pricing_str:
+        pricing_str = f"${pricing_str.strip()}"
+
+    parsed_pricing = parse_concept_pricing_details(pricing_str)
+    founding_price = parsed_pricing["founding_price"]
+    deposit_price = parsed_pricing["deposit_price"]
+    starter_price = parsed_pricing["starter_price"]
+    pro_price = parsed_pricing["pro_price"]
+    pricing_tiers = parsed_pricing["pricing_tiers"]
+
+    # Compute deterministic validation threshold
+    if body.presaleTarget and float(body.presaleTarget) > 0:
+        presale_target_val = float(body.presaleTarget)
+        target_presales_count = max(1, round(presale_target_val / max(founding_price, 1)))
+    elif concept_data.get("presaleTarget") and float(concept_data.get("presaleTarget")) > 0:
+        presale_target_val = float(concept_data.get("presaleTarget"))
+        target_presales_count = max(1, round(presale_target_val / max(founding_price, 1)))
+    else:
+        target_presales_count = max(20, min(100, round(5000 / max(founding_price, 10))))
+        presale_target_val = float(target_presales_count * founding_price)
+
+    threshold_str = f"${int(presale_target_val):,} in presales ({target_presales_count} founding orders) within 14 days"
+    target_orders = target_presales_count
+
+    # Frozen snapshot of chosen concept
+    frozen_concept = copy.deepcopy(concept_data)
+    frozen_concept["frozenAt"] = now_iso
+    frozen_concept["isFrozen"] = True
+
+    c_problem = concept_data.get("problem") or body.problem or "Audience workflow bottleneck"
+    c_customer = concept_data.get("customer") or concept_data.get("demographicAlignment") or body.customer or body.targetAudience or "Creator audience"
+    c_evidence = concept_data.get("audienceEvidence") or getattr(body, "audienceEvidence", None) or ""
+    c_difficulty = concept_data.get("mvpDifficulty") or getattr(body, "mvpDifficulty", None) or "2 weeks"
+    c_score = concept_data.get("opportunityScore") or getattr(body, "opportunityScore", None) or 90
+    c_rev_model = body.revenueModel or concept_data.get("revenueModel") or "Subscription · 50/50 revenue share"
+
+    if existing_doc:
+        # Existing draft project: update attributes while maintaining project identity
+        existing_doc["productName"] = product_name
+        existing_doc["product_name"] = product_name
+        existing_doc["title"] = product_name
+        existing_doc["productTagline"] = product_tagline
+        existing_doc["product_tagline"] = product_tagline
+        existing_doc["pricing"] = pricing_str
+        existing_doc["problem"] = c_problem
+        existing_doc["customer"] = c_customer
+        existing_doc["targetAudience"] = c_customer
+        existing_doc["target_audience"] = c_customer
+        existing_doc["keyFeatures"] = concept_data.get("keyFeatures") or concept_data.get("features") or body.keyFeatures or []
+        existing_doc["key_features"] = existing_doc["keyFeatures"]
+        existing_doc["revenueModel"] = c_rev_model
+        existing_doc["revenue_model"] = c_rev_model
+        existing_doc["mvpDifficulty"] = c_difficulty
+        existing_doc["mvp_difficulty"] = c_difficulty
+        existing_doc["opportunityScore"] = c_score
+        existing_doc["opportunity_score"] = c_score
+        existing_doc["audienceEvidence"] = c_evidence
+        existing_doc["audience_evidence"] = c_evidence
+        existing_doc["selectedConcept"] = frozen_concept
+        existing_doc["selected_concept"] = frozen_concept
+        existing_doc["conceptFrozen"] = True
+        existing_doc["concept_frozen"] = True
+        existing_doc["selectedConceptFrozenAt"] = now_iso
+        existing_doc["selected_concept_frozen_at"] = now_iso
+        existing_doc["presaleTarget"] = presale_target_val
+        existing_doc["presale_target"] = presale_target_val
+
+        # Ensure unique slug
+        if not existing_doc.get("slug"):
+            cand_slug = body.slug or product_name
+            u_slug = _generate_unique_project_slug(coll, cand_slug, clean_handle, exclude_id=existing_doc["id"])
+            existing_doc["slug"] = u_slug
+            existing_doc["productSlug"] = u_slug
+            existing_doc["product_slug"] = u_slug
+
+        # Validation Plan
+        existing_doc["validationPlan"] = {
+            "id": f"plan_{existing_doc['id']}",
+            "customer": c_customer,
+            "problem": c_problem,
+            "offer": f"{product_name} Founding Co-Launch Access: {product_tagline}",
+            "pricing": pricing_str,
+            "testMethod": "1) Co-founder video announcement, 2) 10 user interviews, 3) 48-hour Founding Pre-Order sprint",
+            "period": "14 days",
+            "threshold": threshold_str,
+            "targetRevenue": presale_target_val,
+            "targetOrders": target_orders,
+            "status": "ready",
+            "generated": True,
+            "locked": False,
+        }
+        existing_doc["validation_plan"] = existing_doc["validationPlan"]
+
+        if "validationCampaign" in existing_doc and isinstance(existing_doc["validationCampaign"], dict):
+            va = existing_doc["validationCampaign"].get("productAssets") or existing_doc["validationCampaign"].get("product_assets") or {}
+            va["pricingConfig"] = parsed_pricing["pricing_config"]
+            va["pricingTiers"] = parsed_pricing["pricing_tiers"]
+            existing_doc["validationCampaign"]["productAssets"] = va
+            existing_doc["validationCampaign"]["product_assets"] = va
 
         if cand_fee is not None:
             existing_doc["diyFee"] = def_fee
             existing_doc["diyPassPrice"] = def_fee
             existing_doc["hasCustomFee"] = has_custom_fee_init
-            if isinstance(existing_doc.get("metadataInfo"), dict):
-                existing_doc["metadataInfo"]["diy_fee"] = def_fee
-                existing_doc["metadataInfo"]["diyFee"] = def_fee
-                existing_doc["metadataInfo"]["diyPassPrice"] = def_fee
-                existing_doc["metadataInfo"]["hasCustomFee"] = has_custom_fee_init
+
         _save_mongo_project(existing_doc)
 
         c_id = existing_doc.get("creatorId") or existing_doc.get("creator_id")
@@ -1202,21 +1319,15 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
     followers_str = str(creator_doc.get("follower_count") or creator_doc.get("followers") or body.followers or "100,000")
 
     proj_id = body.id or f"proj_{int(datetime.utcnow().timestamp()*1000)}"
-    slug = product_name.lower().replace(" ", "-").replace("'", "")
-    customer_desc = body.customer or body.targetAudience or concept_data.get("customer") or concept_data.get("demographicAlignment") or f"{niche_str} audience"
-    problem_desc = body.problem or concept_data.get("problem") or concept_data.get("description") or f"Manual workflows and lack of specialized tools in {niche_str}"
-
-    parsed_pricing = parse_concept_pricing_details(pricing_str)
-    founding_price = parsed_pricing["founding_price"]
-    deposit_price = parsed_pricing["deposit_price"]
-    starter_price = parsed_pricing["starter_price"]
-    pro_price = parsed_pricing["pro_price"]
-    pricing_tiers = parsed_pricing["pricing_tiers"]
+    cand_slug = body.slug or product_name
+    slug = _generate_unique_project_slug(coll, cand_slug, c_handle)
+    customer_desc = c_customer
+    problem_desc = c_problem
 
     sample_tasks = [
         {"id": f"t_{proj_id}_1", "dayNumber": 1, "day": 1, "channel": "instagram", "task_title": "Post Instagram Story #1: Problem Teaser", "title": "Post Instagram Story #1: Problem Teaser", "content": f"Hey everyone! Notice how annoying {problem_desc.lower()} is? Co-founding a solution.", "cta": "Vote on poll + DM me", "trackingLink": f"/p/{slug}?utm=ig1", "status": "today"},
         {"id": f"t_{proj_id}_2", "dayNumber": 2, "day": 2, "channel": "instagram", "task_title": "Post Instagram Story #2: Behind The Scenes", "title": "Post Instagram Story #2: Behind The Scenes", "content": f"Revealing {product_name} first build preview today!", "cta": "Tap link to view preview", "trackingLink": f"/p/{slug}?utm=ig2", "status": "pending"},
-        {"id": f"t_{proj_id}_3", "dayNumber": 3, "day": 3, "channel": "youtube", "task_title": "YouTube Video Integration (60s Mid-Roll)", "title": "YouTube Video Integration (60s Mid-Roll)", "content": f"Opening 50 founding spots for {product_name} at 50% off (${founding_price}).", "cta": "Check pinned comment", "trackingLink": f"/p/{slug}?utm=yt", "status": "pending"},
+        {"id": f"t_{proj_id}_3", "dayNumber": 3, "day": 3, "channel": "youtube", "task_title": "YouTube Video Integration (60s Mid-Roll)", "title": "YouTube Video Integration (60s Mid-Roll)", "content": f"Opening {target_orders} founding spots for {product_name} at 50% off (${founding_price}).", "cta": "Check pinned comment", "trackingLink": f"/p/{slug}?utm=yt", "status": "pending"},
         {"id": f"t_{proj_id}_4", "dayNumber": 5, "day": 5, "channel": "newsletter", "task_title": "Newsletter Broadcast: Founding Cohort Announcement", "title": "Newsletter Broadcast: Founding Cohort Announcement", "content": f"Subject: Building something new with you.\n\nToday we open founding presales for {product_name} ($50% off - ${founding_price}).", "cta": f"Reserve Founding Access (${founding_price})", "trackingLink": f"/p/{slug}?utm=newsletter", "status": "pending"},
         {"id": f"t_{proj_id}_5", "dayNumber": 7, "day": 7, "channel": "twitter", "task_title": "X/Twitter Breakdown Thread", "title": "X/Twitter Breakdown Thread", "content": f"1/5 Why existing tools fail for {customer_desc}.\n2/5 How we built {product_name}.\n3/5 Pre-orders open now.", "cta": f"Claim founding pass (${founding_price})", "trackingLink": f"/p/{slug}?utm=twitter", "status": "pending"},
     ]
@@ -1224,6 +1335,9 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
     new_project_doc = {
         "_id": proj_id,
         "id": proj_id,
+        "slug": slug,
+        "productSlug": slug,
+        "product_slug": slug,
         "creatorId": c_id,
         "creator_id": c_id,
         "creatorHandle": c_handle,
@@ -1236,19 +1350,28 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         "creator_email": c_email,
         "niche": niche_str,
         "followers": followers_str,
+        "name": product_name,
         "productName": product_name,
         "product_name": product_name,
         "title": product_name,
         "productTagline": product_tagline,
         "product_tagline": product_tagline,
+        "tagline": product_tagline,
         "targetAudience": customer_desc,
         "target_audience": customer_desc,
         "customer": customer_desc,
         "problem": problem_desc,
         "keyFeatures": concept_data.get("keyFeatures") or concept_data.get("features") or body.keyFeatures or [],
+        "key_features": concept_data.get("keyFeatures") or concept_data.get("features") or body.keyFeatures or [],
         "pricing": pricing_str,
-        "revenueModel": body.revenueModel or concept_data.get("revenueModel") or "SaaS Subscription",
-        "revenue_model": body.revenueModel or concept_data.get("revenueModel") or "SaaS Subscription",
+        "revenueModel": c_rev_model,
+        "revenue_model": c_rev_model,
+        "mvpDifficulty": c_difficulty,
+        "mvp_difficulty": c_difficulty,
+        "opportunityScore": c_score,
+        "opportunity_score": c_score,
+        "audienceEvidence": c_evidence,
+        "audience_evidence": c_evidence,
         "currentPhase": 1,
         "current_phase": 1,
         "currentStep": "plan",
@@ -1277,8 +1400,12 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         "diy_fee": def_fee,
         "diyPassPrice": def_fee,
         "hasCustomFee": has_custom_fee_init,
-        "selectedConcept": concept_data,
-        "selected_concept": concept_data,
+        "selectedConcept": frozen_concept,
+        "selected_concept": frozen_concept,
+        "conceptFrozen": True,
+        "concept_frozen": True,
+        "selectedConceptFrozenAt": now_iso,
+        "selected_concept_frozen_at": now_iso,
         "brandColor": body.brandColor or getattr(body, "brand_color", None) or concept_data.get("brandColor") or "#c81e3c",
         "brand_color": body.brandColor or getattr(body, "brand_color", None) or concept_data.get("brandColor") or "#c81e3c",
         "colorTheme": body.colorTheme or getattr(body, "color_theme", None) or concept_data.get("colorTheme") or "crimson",
@@ -1291,9 +1418,27 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
             "pricing": pricing_str,
             "testMethod": "1) Co-founder video announcement, 2) 10 user interviews, 3) 48-hour Founding Pre-Order sprint",
             "period": "14 days",
-            "threshold": f"${int(presale_target_val):,} in presales within 14 days",
+            "threshold": threshold_str,
             "targetRevenue": presale_target_val,
-            "status": "ready"
+            "targetOrders": target_orders,
+            "status": "ready",
+            "generated": True,
+            "locked": False,
+        },
+        "validation_plan": {
+            "id": f"plan_{proj_id}",
+            "customer": customer_desc,
+            "problem": problem_desc,
+            "offer": f"{product_name} Founding Co-Launch Access: {product_tagline}",
+            "pricing": pricing_str,
+            "testMethod": "1) Co-founder video announcement, 2) 10 user interviews, 3) 48-hour Founding Pre-Order sprint",
+            "period": "14 days",
+            "threshold": threshold_str,
+            "targetRevenue": presale_target_val,
+            "targetOrders": target_orders,
+            "status": "ready",
+            "generated": True,
+            "locked": False,
         },
         "validationCampaign": {
             "id": f"camp_{proj_id}",
@@ -1306,14 +1451,14 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
                 "keyFeatures": concept_data.get("keyFeatures") or concept_data.get("features") or body.keyFeatures or [],
                 "mockup": body.mockup or concept_data.get("mockup") or {},
                 "mockupType": concept_data.get("mockupType") or "saas_os",
-                "selectedConcept": concept_data,
+                "selectedConcept": frozen_concept,
                 "pricingConfig": {"foundingPrice": founding_price, "depositPrice": deposit_price},
                 "pricingTiers": pricing_tiers
             },
             "infrastructure": {
                 "landingPageUrl": f"/p/{slug}",
                 "checkoutUrl": f"/p/{slug}/checkout",
-                "waitlistCount": 240,
+                "waitlistCount": 0,
                 "attributionTracking": True,
                 "utmSource": "creator_launch"
             },
@@ -1423,6 +1568,11 @@ def get_project(
                 {"creatorHandle": {"$regex": f"^{clean_target}$", "$options": "i"}},
                 {"creator_handle": project_id},
                 {"creatorHandle": project_id},
+                {"slug": clean_target},
+                {"slug": project_id},
+                {"productSlug": clean_target},
+                {"productSlug": project_id},
+                {"product_slug": clean_target},
                 {"productSlug": clean_target},
                 {"productSlug": {"$regex": f"^{clean_target}$", "$options": "i"}},
                 {"slug": clean_target},
