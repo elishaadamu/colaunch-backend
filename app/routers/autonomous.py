@@ -1315,8 +1315,11 @@ Prioritize this direction heavily in concept naming, target customer, key featur
 """
 
     system_prompt = (
-        "You are an elite venture studio product strategist and AI software architect at CoLaunch. "
-        "You design high-margin B2B/B2C SaaS products tailored to creator audiences with verified commercial demand."
+        "You are a product strategist at CoLaunch, a studio that co-builds software companies with creators on a 50/50 basis. "
+        "Your job: read one creator's audience data and propose exactly 3 software products their audience would pay for. "
+        "HARD RULES: 1. Ground in audience data. 2. 3 different problems. 3. Order: Concept 1 = workflow, Concept 2 = copilot, Concept 3 = vault. "
+        "4. Software only (no courses, e-books, merch, or services). 5. Names: 1-3 words, NO creator name. "
+        "6. KeyFeatures: exactly 4 strings 'Title: description' with title 3-28 characters. 7. RevenueModel: 'Subscription · 50/50 revenue share'."
     )
     prompt = f"""Analyze the creator profile below and engineer the top 3 software product opportunities and deep audience research:
 
@@ -1338,37 +1341,26 @@ Generate a comprehensive JSON object with:
    - "competitors": {{"description": "...", "badge": "Market Landscape", "moat": "..."}}
 2. "product_concepts": Array of exactly 3 software products:
    - "id": "p1" / "p2" / "p3"
-   - "name": Unique, marketable SaaS name (e.g. {first_name} OS, StreamScale AI, etc.)
-   - "tagline": Punchy 1-line value proposition
+   - "archetype": "workflow" (Concept 1) / "copilot" (Concept 2) / "vault" (Concept 3)
+   - "name": 1 to 3 words, easy to say aloud, DOES NOT contain "{first_name}" or creator name
+   - "tagline": 4 to 10 words plain language outcome
    - "description": 2-3 sentence overview
-   - "brandColor": Hex code matching product vibe from CoLaunch vibrant studio palette (e.g. "#10B981" electric emerald, "#06B6D4" ocean cyan, "#3B82F6" studio blue, "#F59E0B" venture amber, "#C8FF3D" forge lime, "#F43F5E" hot coral). Strictly DO NOT use dark slate (#0F172A, #1E293B, #000000) or generic purple or violet AI colors.
-   - "demographicAlignment": Specific buyer demographic matched to {c_name}'s audience
-   - "problem": Exact problem solved for {niche} users
-   - "customer": Primary target user persona
-   - "keyFeatures": Array of 3-4 distinct features
-   - "audienceEvidence": Why this audience will pay
-   - "pricing": MUST be DISTINCT and UNIQUE across all 3 concepts:
-     * Concept 1 (saas_os): Lower barrier recurring tool pricing, e.g. "$19/mo Starter • $49/mo Pro"
-     * Concept 2 (ai_copilot): Mid-tier utility AI pricing, e.g. "$29/mo Pro • $79/mo Copilot Tier"
-     * Concept 3 (knowledge_hub): High-ticket membership pricing, e.g. "$49/mo Membership • $149 One-time Access" or "$69/mo VIP Mastermind"
-     CRITICAL: DO NOT repeat the same pricing string or identical prices across the 3 concepts!
-   - "competition": Competitor landscape & unfair advantage
-   - "mvpDifficulty": "Low (2 weeks)" or "Medium (3 weeks)"
-   - "opportunityScore": Integer 90-98
-   - "mockupType": MUST be "saas_os" for Concept 1, "ai_copilot" for Concept 2, "knowledge_hub" for Concept 3 (each concept MUST have a distinct visual archetype)
+   - "brandColor": Hex code matching product vibe from CoLaunch palette ("#10B981", "#06B6D4", "#F59E0B", "#C81E3C")
+   - "demographicAlignment": Specific buyer demographic
+   - "problem": 1 to 2 sentences written to customer ("You...")
+   - "customer": Primary target user persona (at most 90 characters)
+   - "keyFeatures": Array of exactly 4 strings in the form "Title: description" where Title is 3 to 28 characters
+   - "audienceEvidence": Verbatim comment from audience, or empty string
+   - "pricing": "$X/mo Starter · $Y/mo Pro"
+   - "presalePrice": Number (e.g. 29, 49)
+   - "revenueModel": "Subscription · 50/50 revenue share"
+   - "buildWeeks": Integer 2 to 8
+   - "mvpDifficulty": "2 weeks" / "3 weeks"
+   - "scores": {{"demand": 1-5, "fit": 1-5, "buildability": 1-5, "monetisation": 1-5}}
+   - "mockupType": "saas_os" (Concept 1), "ai_copilot" (Concept 2), "knowledge_hub" (Concept 3)
 3. "pitch_email":
    - "subject": "Software concepts tailored for @{c_handle}"
-   - "body": Professional, authentic 1-on-1 personal email from CoLaunch Partnerships (NOT a newsletter - newsletters get flagged). Must include:
-     1. Natural personal opening addressing the creator by first name.
-     2. A highlighted blockquote note emphasizing that the concepts are based on an analysis of their channel videos, recurring questions in comments, and community discussions:
-        "> **Audience Research Note:** These 3 software concepts were architected directly from an in-depth analysis of your channel videos, recurring questions in your comments, and discussions across your community. They are built around real demand your audience has already demonstrated."
-     3. The 3 concepts clearly presented with name, pricing, tagline, what problem it solves, landing page URL ("{frontend_base}/preorder/{c_handle}?concept=<concept-slug>"), and an image embed markdown line for each concept: "![<Concept Name> Preview](<imageUrl>)".
-     4. Clear explanation of our 50/50 partnership terms (engineering covers 100% of development, hosting, billing, and support at zero cost/risk to creator).
-     5. A highlighted blockquote note emphasizing total creative flexibility:
-        "> **100% Flexible:** If you'd like to adjust any of these concepts, explore additional directions, or if you have an idea of your own you'd love to build for your community, we'd love to hear it. You maintain full creative control, and our engineering team is here to bring your vision to life."
-     6. Normal human invitation asking them to reply directly to this email with their thoughts.
-     7. Strictly NO emojis, NO promotional newsletter buttons, NO marketing jargon.
-     8. Sign off: "Best regards,\nCoLaunch Venture Partnerships\nHead of Venture Partnerships, CoLaunch".
+   - "body": Professional 1-on-1 personal email with 50/50 terms, zero promotional fluff.
 
 Return valid JSON only matching the structure above."""
 
@@ -1417,9 +1409,43 @@ Return valid JSON only matching the structure above."""
 
     def _sanitize_concepts_data(c_list):
         seen_pricings = set()
+        c_name_tokens = [t.lower() for t in (c_name or "").split() if len(t) > 2]
+        c_name_tokens.extend([t.lower() for t in (first_name or "").split() if len(t) > 2])
         for i, concept in enumerate(c_list):
             if i < len(archetypes):
+                concept["archetype"] = ["workflow", "copilot", "vault"][i]
                 concept["mockupType"] = archetypes[i]
+            # Strip creator name if accidentally included
+            name_val = (concept.get("name") or "").strip()
+            for tok in c_name_tokens:
+                if name_val.lower().startswith(tok):
+                    name_val = re.sub(f"^{re.escape(tok)}\\s*", "", name_val, flags=re.IGNORECASE).strip()
+            if not name_val:
+                name_val = ["FocusPulse", "MindTune", "Equilibrium"][i % 3]
+            concept["name"] = name_val
+            # Fixed revenueModel
+            concept["revenueModel"] = "Subscription · 50/50 revenue share"
+            # Clean build difficulty
+            weeks = concept.get("buildWeeks") or (2 if i != 1 else 3)
+            concept["mvpDifficulty"] = f"{weeks} weeks"
+            # Calculate opportunity score if missing or formula
+            scores = concept.get("scores") or {"demand": 4, "fit": 4, "buildability": 4, "monetisation": 4}
+            weighted = (scores.get("demand", 4)*0.35 + scores.get("fit", 4)*0.25 + scores.get("buildability", 4)*0.15 + scores.get("monetisation", 4)*0.25)
+            concept["opportunityScore"] = int(round((weighted / 5.0) * 100))
+            # Format keyFeatures: Title: description (title <= 28 chars)
+            feats = concept.get("keyFeatures") or []
+            clean_feats = []
+            for f_item in feats[:4]:
+                f_str = str(f_item).strip()
+                m_feat = re.match(r"^([^:—–\-]{3,64}?)(?:\s*:\s*|\s+[—–-]\s+)(.{10,})$", f_str)
+                if m_feat:
+                    title_part = m_feat.group(1).strip()[:28]
+                    desc_part = m_feat.group(2).strip()[:110]
+                    clean_feats.append(f"{title_part}: {desc_part}")
+                else:
+                    title_part = f_str[:28]
+                    clean_feats.append(f"{title_part}: Tailored built-in module for your daily workflow.")
+            concept["keyFeatures"] = clean_feats
             p = (concept.get("pricing") or "").strip()
             if not p or p in seen_pricings:
                 concept["pricing"] = default_tiered_pricings[i % len(default_tiered_pricings)]
@@ -1492,94 +1518,103 @@ Return valid JSON only matching the structure above."""
         "product_concepts": [
             {
                 "id": "p1",
-                "name": f"{first_name} OS" if not custom_prompt else f"{first_name} Studio OS",
-                "tagline": f"The all-in-one automated operating system for {niche} professionals{fallback_prompt_prefix}",
-                "description": f"A specialized SaaS workspace combining pre-built workflow automations, project boards, and analytics built specifically for {niche} practitioners.",
+                "archetype": "workflow",
+                "name": "FocusPulse",
+                "tagline": "Daily guided neuro-routine to rebuild deep focus and reduce overwhelm",
+                "description": "A structured daily exercise runner that guides you through physical and breathing drills designed to reset cognitive clarity.",
                 "brandColor": "#10B981",
-                "demographicAlignment": f"24-42 Yrs • High-income {niche} practitioners & agency founders",
-                "problem": f"Lack of unified workflow tools and excessive manual hours spent on {niche} operations.",
-                "customer": f"{niche} creators, freelancers, and growing agency owners",
+                "demographicAlignment": "Subscribers battling daily digital fatigue and mental fog",
+                "problem": "You lose momentum switching between fragmented exercises and tracking logs.",
+                "customer": "Mindfulness practitioners and focus-driven learners",
                 "keyFeatures": [
-                    "Automated Workflow Pipelines",
-                    "Ready-to-Use Asset & Template Library",
-                    "Client Collaboration & Analytics Dashboard",
-                    "One-Click Digital Delivery System"
+                    "Daily check-in: Log fatigue levels and mental friction in 30 seconds.",
+                    "Guided routine: Step-by-step physical and breathing exercises with voice pacing.",
+                    "Focus sprint timer: Sound-damped work intervals paired with audio cues.",
+                    "Streak tracking: Track cognitive clarity and consistency over time."
                 ],
-                "audienceEvidence": f"Over 300+ comments across top {platform} videos asking for {first_name}'s personal workflow setup.",
-                "pricing": "$29/mo Starter • $79/mo Pro",
-                "revenueModel": "SaaS Subscription • 50/50 Revenue Share • Projected $22.5K MRR",
-                "competition": "Notion/Airtable (too complex & generic) vs. our tailored ready-to-launch tool",
-                "mvpDifficulty": "Low (2 weeks to ship)",
-                "opportunityScore": 96,
+                "audienceEvidence": "",
+                "pricing": "$19/mo Starter · $49/mo Pro",
+                "presalePrice": 29,
+                "revenueModel": "Subscription · 50/50 revenue share",
+                "competition": "Generic habit trackers vs. our tailored neuro-plasticity routine runner",
+                "mvpDifficulty": "2 weeks",
+                "scores": {"demand": 4, "fit": 5, "buildability": 5, "monetisation": 4},
+                "opportunityScore": 88,
                 "mockupType": "saas_os",
                 "mockup": {
-                    "appUrl": f"{first_name.lower()}os.app",
-                    "primaryStat": "$42.5k Projected MRR",
-                    "primaryMetric": "$22.5K MRR",
-                    "activeMetric": "850 Active",
+                    "appUrl": "focuspulse.app",
+                    "primaryStat": "88/100 Demand",
+                    "primaryMetric": "14-Day Sprint",
+                    "activeMetric": "2 Weeks Build",
                     "efficiencyMetric": "96%",
                     "accentColor": "emerald"
                 }
             },
             {
                 "id": "p2",
-                "name": f"{first_name} Flow AI",
-                "tagline": f"AI-powered intelligence copilot tailored for {niche}",
-                "description": f"An intelligent AI copilot that automatically drafts, optimizes, and analyzes {niche} strategies and deliverables in seconds.",
+                "archetype": "copilot",
+                "name": "MindTune",
+                "tagline": "Adaptive daily mental reset drills tailored to your fatigue level",
+                "description": "An intelligent cognitive companion that analyzes your current mental and physical tension to recommend the exact 3-minute exercise you need.",
                 "brandColor": "#06B6D4",
-                "demographicAlignment": f"22-38 Yrs • Early adopters & tech-forward digital workers in {niche}",
-                "problem": "Subscribers spend hours generating assets and optimizing their day-to-day outputs.",
-                "customer": f"Active {niche} practitioners looking to 10x their daily productivity",
+                "demographicAlignment": "Knowledge workers and students facing digital burnout",
+                "problem": "You can tell when fatigue is setting in, but you don't know which drill resets your energy fastest.",
+                "customer": "Knowledge workers battling digital burnout and fatigue",
                 "keyFeatures": [
-                    f"Fine-Tuned {niche} AI Copilot",
-                    "Smart Asset Generator & Format Adapter",
-                    "Instant Quality Scoring & Feedback",
-                    "Direct Multi-Platform Publishing"
+                    "Fatigue diagnosis: Input current stress triggers to receive tailored drills.",
+                    "Adaptive drills: Real-time adjustments based on physical tension feedback.",
+                    "Micro-break prompts: Smart desktop reminders when mental fatigue sets in.",
+                    "Audio soundscapes: Binaural beats matched to your session goal."
                 ],
-                "audienceEvidence": "High engagement on AI and automation tutorials with high viral replay rates.",
-                "pricing": "$39/mo Creator • $99/mo Studio",
-                "revenueModel": "Tiered SaaS • 50/50 Revenue Share • Projected $31.8K MRR",
-                "competition": "Generic ChatGPT vs. our pre-trained niche specialized intelligence engine",
-                "mvpDifficulty": "Medium (3 weeks to ship)",
-                "opportunityScore": 93,
+                "audienceEvidence": "",
+                "pricing": "$29/mo Starter · $79/mo Pro",
+                "presalePrice": 39,
+                "revenueModel": "Subscription · 50/50 revenue share",
+                "competition": "Generic chatbots vs. our specialized neuro-reset decision engine",
+                "mvpDifficulty": "3 weeks",
+                "scores": {"demand": 4, "fit": 4, "buildability": 4, "monetisation": 4},
+                "opportunityScore": 80,
                 "mockupType": "ai_copilot",
                 "mockup": {
-                    "appUrl": f"{first_name.lower()}flow.ai",
-                    "primaryStat": "850+ Active Pre-Orders",
-                    "primaryMetric": "$31.8K MRR",
-                    "activeMetric": "1,420 Copilot Runs",
+                    "appUrl": "mindtune.ai",
+                    "primaryStat": "80/100 Demand",
+                    "primaryMetric": "3-Min Reset",
+                    "activeMetric": "Adaptive AI",
                     "efficiencyMetric": "94%",
                     "accentColor": "cyan"
                 }
             },
             {
                 "id": "p3",
-                "name": f"{first_name} Pro Hub",
-                "tagline": f"Private community, premium software toolkit & deal network for {niche}",
-                "description": f"A hybrid SaaS toolkit and private master community connecting {first_name}'s top subscribers with private tools, templates, and group calls.",
+                "archetype": "vault",
+                "name": "Equilibrium",
+                "tagline": "Searchable library of video drills, audio cues, and daily practice logs",
+                "description": "A members-only interactive drill library with categorized video exercises, custom audio timers, and personal habit journals.",
                 "brandColor": "#F59E0B",
-                "demographicAlignment": f"25-45 Yrs • High-intent power subscribers with premium budget",
-                "problem": "Followers want direct mentorship, premium software toolkits, and private networking.",
-                "customer": f"Dedicated power followers and high-intent students in {niche}",
+                "demographicAlignment": "Dedicated community members wanting a complete practice vault",
+                "problem": "You want a structured reference library of physical drills without waiting for new video uploads.",
+                "customer": "Dedicated subscribers committing to daily neuro-plasticity habits",
                 "keyFeatures": [
-                    "Exclusive Software Toolkit & Presets",
-                    "Private Masterclass & Q&A Lounge",
-                    "Verified Member Project Directory",
-                    "Monthly Group Strategy Sprints"
+                    "Exercise index: Filter 80+ video drills by posture, duration, and energy.",
+                    "Custom playlist: Chain stretches and breathing sets into your own routines.",
+                    "Session timer: Interval chime and audio guide for quiet solo practice.",
+                    "Offline downloads: Save daily practices to phone for travel and flights."
                 ],
-                "audienceEvidence": "Subscribers frequently ask in comments for a private mastermind or VIP tier.",
-                "pricing": "$49/mo Community • $149/mo VIP Mastermind",
-                "revenueModel": "Private Hub Membership • 50/50 Revenue Share • Projected $28.0K MRR",
-                "competition": "Discord/Slack (disorganized) vs. our custom branded web platform",
-                "mvpDifficulty": "Low (2 weeks to ship)",
-                "opportunityScore": 89,
+                "audienceEvidence": "",
+                "pricing": "$49/mo Starter · $129/mo Annual",
+                "presalePrice": 49,
+                "revenueModel": "Subscription · 50/50 revenue share",
+                "competition": "YouTube playlists (unstructured, ads) vs. our offline searchable practice vault",
+                "mvpDifficulty": "2 weeks",
+                "scores": {"demand": 4, "fit": 5, "buildability": 4, "monetisation": 3},
+                "opportunityScore": 80,
                 "mockupType": "knowledge_hub",
                 "mockup": {
-                    "appUrl": f"{first_name.lower()}prohub.com",
-                    "primaryStat": "94% Retention Benchmark",
-                    "primaryMetric": "$28.0K MRR",
-                    "activeMetric": "480 VIP Members",
-                    "efficiencyMetric": "92%",
+                    "appUrl": "equilibrium.vault",
+                    "primaryStat": "80/100 Fit",
+                    "primaryMetric": "80+ Drills",
+                    "activeMetric": "Offline Ready",
+                    "efficiencyMetric": "95%",
                     "accentColor": "amber"
                 }
             }
@@ -1590,21 +1625,21 @@ Return valid JSON only matching the structure above."""
                 f"Hi {first_name},\n\n"
                 f"Following up on our partnership discussion. Based on our research on your {niche} content and community on {platform}, here are the top 3 software product concepts we engineered for your audience:\n\n"
                 f"> **Audience Research Note:** These 3 software concepts were architected directly from an in-depth analysis of your channel videos, recurring questions in your comments, and community discussions. They are built around real demand your audience has already demonstrated.\n\n"
-                f"1. **{first_name} OS** ($29-$79/mo)\n"
-                f"• Tagline: The all-in-one automated operating system for {niche} professionals\n"
-                f"• Solves: Eliminates 10+ hours of manual administrative overhead per week\n"
-                f"• Live Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-os\n\n"
-                f"![{first_name} OS Preview](https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=1000&auto=format&fit=crop&q=80)\n\n"
-                f"2. **{first_name} Flow AI** ($39-$99/mo)\n"
-                f"• Tagline: AI-powered workflow assistant tailored specifically for {niche}\n"
-                f"• Solves: Bridges the gap between generic AI tools and specialized domain workflows\n"
-                f"• Live Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-flow-ai\n\n"
-                f"![{first_name} Flow AI Preview](https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1000&auto=format&fit=crop&q=80)\n\n"
-                f"3. **{first_name} Pro Hub** ($49-$149/mo)\n"
-                f"• Tagline: Private software toolkit, deal network, and resource vault\n"
-                f"• Solves: Gives serious practitioners high-signal mentorship, curated templates, and verified deal flow\n"
-                f"• Live Landing Page: {frontend_base}/preorder/{c_handle}?concept={first_name.lower()}-pro-hub\n\n"
-                f"![{first_name} Pro Hub Preview](https://images.unsplash.com/photo-1531403009284-440f080d1e12?w=1000&auto=format&fit=crop&q=80)\n\n"
+                f"1. **FocusPulse** ($19-$49/mo)\n"
+                f"• Tagline: Daily guided neuro-routine to rebuild deep focus and reduce overwhelm\n"
+                f"• Solves: Eliminates momentum loss from fragmented physical and mental exercises\n"
+                f"• Live Landing Page: {frontend_base}/preorder/{c_handle}?concept=focuspulse\n\n"
+                f"![FocusPulse Preview](https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=1000&auto=format&fit=crop&q=80)\n\n"
+                f"2. **MindTune** ($29-$79/mo)\n"
+                f"• Tagline: Adaptive daily mental reset drills tailored to your fatigue level\n"
+                f"• Solves: Eliminates guesswork in choosing the right physical tension relief drill\n"
+                f"• Live Landing Page: {frontend_base}/preorder/{c_handle}?concept=mindtune\n\n"
+                f"![MindTune Preview](https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1000&auto=format&fit=crop&q=80)\n\n"
+                f"3. **Equilibrium** ($49-$129/mo)\n"
+                f"• Tagline: Searchable library of video drills, audio cues, and daily practice logs\n"
+                f"• Solves: Structured searchable drill library with offline mode and audio guides\n"
+                f"• Live Landing Page: {frontend_base}/preorder/{c_handle}?concept=equilibrium\n\n"
+                f"![Equilibrium Preview](https://images.unsplash.com/photo-1531403009284-440f080d1e12?w=1000&auto=format&fit=crop&q=80)\n\n"
                 f"Under our 50/50 partnership, our engineering team handles 100% of product development, cloud hosting, billing infrastructure, and ongoing technical support with zero financial cost or risk to you.\n\n"
                 f"> **100% Flexible:** If you'd like to adjust any of these concepts, explore additional directions, or if you already have an idea of your own you'd love to build for your community, we are completely open to it. You maintain full creative control, and our engineering team is here to bring your vision to life.\n\n"
                 f"Let me know which concept resonates most with you, or if you'd like us to draft more ideas or look into your own concept. You can simply reply directly to this email.\n\n"
