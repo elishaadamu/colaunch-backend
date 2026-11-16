@@ -15,10 +15,43 @@ from app.models.project import (
     CreatorCampaignTask, ValidationTelemetry, ValidationGateDecision
 )
 from app.models.creator import Creator
+from app.auth import (
+    AuthenticatedUser,
+    AuthRole,
+    get_current_auth,
+    require_operator,
+    require_project_access,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+
+def _filter_public_project_dict(doc: dict) -> dict:
+    """Return public-safe projection of a project document (no emails, no revenue, no operator notes)."""
+    p_id = str(doc.get("id") or doc.get("_id") or "")
+    slug = str(doc.get("slug") or "")
+    concept = doc.get("selectedConcept") or doc.get("selected_concept") or {}
+    return {
+        "id": p_id,
+        "slug": slug,
+        "productName": doc.get("productName") or doc.get("product_name") or "Co-Launch Venture",
+        "productTagline": doc.get("productTagline") or doc.get("product_tagline") or concept.get("tagline") or "",
+        "brandColor": doc.get("brandColor") or doc.get("brand_color") or concept.get("brandColor") or "#C81E3C",
+        "targetAudience": doc.get("targetAudience") or doc.get("customer") or concept.get("customer") or "",
+        "customer": doc.get("customer") or doc.get("targetAudience") or concept.get("customer") or "",
+        "problem": doc.get("problem") or concept.get("problem") or "",
+        "keyFeatures": doc.get("keyFeatures") or doc.get("features") or concept.get("keyFeatures") or [],
+        "pricing": doc.get("pricing") or concept.get("pricing") or "",
+        "presalePrice": doc.get("presalePrice") or doc.get("earlyBirdPrice") or concept.get("presalePrice"),
+        "mockup": doc.get("mockup") or concept.get("mockup") or {},
+        "creatorName": doc.get("creatorName") or doc.get("creator_name") or "",
+        "creatorHandle": doc.get("creatorHandle") or doc.get("creator_handle") or "",
+        "creatorAvatar": doc.get("creatorAvatar") or doc.get("creator_avatar") or "",
+        "currentPhase": int(doc.get("currentPhase") or doc.get("current_phase") or 1),
+        "status": doc.get("status") or "active",
+    }
 
 
 # Pydantic Schemas
@@ -964,7 +997,10 @@ def _format_any_project(mongo_doc: Optional[Dict[str, Any]] = None, db_proj: Opt
 
 
 @router.get("")
-def list_projects(db: Session = Depends(get_db)):
+def list_projects(
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
+):
     """List all co-launch projects directly and exclusively from MongoDB Atlas."""
     try:
         from app.mongodb import get_collection
@@ -1355,13 +1391,21 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
 
 
 @router.post("", status_code=201)
-def create_project(body: CreateProjectRequest, db: Session = Depends(get_db)):
+def create_project(
+    body: CreateProjectRequest,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
+):
     """Initialize a new Co-Launch Project from Section 1 concept."""
     return execute_create_co_launch_project(db, body)
 
 
 @router.get("/{project_id}")
-def get_project(project_id: str, db: Session = Depends(get_db)):
+def get_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_project_access),
+):
     """Fetch complete co-launch project with all 5 validation steps directly and exclusively from MongoDB."""
     clean_target = project_id.replace("@", "").lower().strip()
     try:
@@ -1406,7 +1450,12 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
 
 @router.patch("/{project_id}")
 @router.put("/{project_id}")
-def update_project_general(project_id: str, body: Dict[str, Any], db: Session = Depends(get_db)):
+def update_project_general(
+    project_id: str,
+    body: Dict[str, Any],
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_project_access),
+):
     """Update co-launch project phase, step, status, or metadata attributes directly in MongoDB Atlas."""
     clean_target = project_id.replace("@", "").lower().strip()
     try:
@@ -1751,7 +1800,12 @@ def update_project_general(project_id: str, body: Dict[str, Any], db: Session = 
 
 
 @router.put("/{project_id}/plan")
-def update_validation_plan(project_id: str, body: UpdatePlanRequest, db: Session = Depends(get_db)):
+def update_validation_plan(
+    project_id: str,
+    body: UpdatePlanRequest,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
+):
     """Save or update Step 1 Validation Plan directly in MongoDB Atlas."""
     proj = _find_mongo_project(project_id)
     if not proj:
@@ -1780,7 +1834,12 @@ def update_validation_plan(project_id: str, body: UpdatePlanRequest, db: Session
 
 
 @router.put("/{project_id}/campaign")
-def update_validation_campaign(project_id: str, body: UpdateCampaignRequest, db: Session = Depends(get_db)):
+def update_validation_campaign(
+    project_id: str,
+    body: UpdateCampaignRequest,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_project_access),
+):
     """Save or update Step 2 Campaign Assets, Infrastructure, Step 3 Campaign Kit, and Creator Tasks in MongoDB Atlas."""
     proj = _find_mongo_project(project_id)
     if not proj:
@@ -1850,7 +1909,8 @@ def generate_project_campaign_image(
     x_gemini_key: Optional[str] = Header(None),
     x_openai_key: Optional[str] = Header(None),
     x_user_role: Optional[str] = Header(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_project_access),
 ):
     """Generate social media post image and store in Cloudinary under creator's profile folder."""
     mongo_doc = _find_mongo_project(project_id)
@@ -2057,7 +2117,8 @@ def generate_project_campaign_video(
     x_gemini_key: Optional[str] = Header(None),
     x_openai_key: Optional[str] = Header(None),
     x_user_role: Optional[str] = Header(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_project_access),
 ):
     """Generate 60s campaign video teaser and store in Cloudinary under creator's profile folder."""
     mongo_doc = _find_mongo_project(project_id)
@@ -2263,7 +2324,8 @@ def generate_project_campaign_video(
 def send_campaign_post_email_endpoint(
     project_id: str,
     body: Optional[SendCampaignPostEmailRequest] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
 ):
     """
     Dispatches a ready-to-publish campaign post kit (caption + visual preview + asset download links)
@@ -2295,7 +2357,8 @@ def send_campaign_post_email_endpoint(
 def toggle_autonomous_delivery_endpoint(
     project_id: str,
     body: ToggleAutonomousDeliveryRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
 ):
     """
     Configures autonomous 24-hour delivery of scheduled post kits directly to creator/founder inbox.
@@ -2399,7 +2462,8 @@ def toggle_autonomous_delivery_endpoint(
 async def start_campaign_simulation_endpoint(
     project_id: str,
     body: Optional[StartCampaignSimulationRequest] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
 ):
     """
     Starts an autonomous 5-minute campaign email delivery simulation.
@@ -2447,7 +2511,8 @@ async def start_campaign_simulation_endpoint(
 @router.get("/{project_id}/campaign/simulation-status")
 def get_campaign_simulation_status_endpoint(
     project_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
 ):
     """Fetches real-time status and delivery logs for active autonomous simulation."""
     from app.services.autonomous_campaign_dispatcher import get_simulation_status
@@ -2465,7 +2530,8 @@ def get_campaign_simulation_status_endpoint(
 @router.post("/{project_id}/campaign/stop-simulation")
 def stop_campaign_simulation_endpoint(
     project_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
 ):
     """Cancels any running autonomous campaign simulation."""
     from app.services.autonomous_campaign_dispatcher import stop_simulation, get_simulation_status
@@ -2479,7 +2545,11 @@ def stop_campaign_simulation_endpoint(
 
 
 @router.get("/{project_id}/creator-tasks")
-def get_creator_tasks(project_id: str, db: Session = Depends(get_db)):
+def get_creator_tasks(
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_project_access),
+):
     """Fetch Step 3 Creator Campaign Tasks directly from MongoDB Atlas."""
     proj = _find_mongo_project(project_id)
     if not proj:
@@ -2492,7 +2562,13 @@ def get_creator_tasks(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.patch("/{project_id}/creator-tasks/{task_id}")
-def update_creator_task(project_id: str, task_id: str, body: UpdateTaskRequest, db: Session = Depends(get_db)):
+def update_creator_task(
+    project_id: str,
+    task_id: str,
+    body: UpdateTaskRequest,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_project_access),
+):
     """Update a Step 3 creator campaign checklist task directly in MongoDB Atlas."""
     proj = _find_mongo_project(project_id)
     if not proj:
@@ -2517,7 +2593,12 @@ def update_creator_task(project_id: str, task_id: str, body: UpdateTaskRequest, 
 
 
 @router.post("/{project_id}/remind-task/{task_id}")
-def send_task_reminder(project_id: str, task_id: str, db: Session = Depends(get_db)):
+def send_task_reminder(
+    project_id: str,
+    task_id: str,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
+):
     """Send an email reminder to creator directly using MongoDB Atlas project."""
     proj = _find_mongo_project(project_id)
     if not proj:
@@ -2551,8 +2632,13 @@ def send_task_reminder(project_id: str, task_id: str, db: Session = Depends(get_
 
 
 @router.post("/{project_id}/reservations")
-def add_reservation(project_id: str, body: AddReservationRequest, db: Session = Depends(get_db)):
-    """Record a verified buyer pre-order / reservation in Step 4 Telemetry directly in MongoDB."""
+def add_reservation(
+    project_id: str,
+    body: AddReservationRequest,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
+):
+    """Record an operator simulated buyer pre-order / reservation in Step 4 Telemetry directly in MongoDB."""
     proj = _find_mongo_project(project_id)
     if not proj:
         raise HTTPException(404, f"Project '{project_id}' not found")
@@ -2567,7 +2653,8 @@ def add_reservation(project_id: str, body: AddReservationRequest, db: Session = 
         "tier": body.tier,
         "channel": body.channel,
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
-        "status": "paid"
+        "status": "paid",
+        "simulated": True,
     }
     cur_res.insert(0, res_item)
     telem["reservations"] = cur_res
@@ -2578,7 +2665,8 @@ def add_reservation(project_id: str, body: AddReservationRequest, db: Session = 
     proj["current_presales"] = new_revenue
     proj["reservations"] = cur_res
 
-    cur_visitors = max(int(telem.get("visitors", 0)), len(cur_res) * 6)
+    # Do not fabricate visitors from reservations count
+    cur_visitors = int(telem.get("visitors", 0))
     telem["visitors"] = cur_visitors
     proj["visitors"] = cur_visitors
     conv = round((len(cur_res) / cur_visitors) * 100, 1) if cur_visitors > 0 else 0.0
@@ -2596,7 +2684,12 @@ def add_reservation(project_id: str, body: AddReservationRequest, db: Session = 
 
 
 @router.post("/{project_id}/gate-decision")
-def record_gate_decision(project_id: str, body: GateDecisionRequest, db: Session = Depends(get_db)):
+def record_gate_decision(
+    project_id: str,
+    body: GateDecisionRequest,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
+):
     """Record Step 5 Executive Validation Gate decision directly in MongoDB."""
     proj = _find_mongo_project(project_id)
     if not proj:
@@ -2649,7 +2742,7 @@ def record_visit_universal(body: TrackVisitRequest, db: Session = Depends(get_db
     from app.mongodb import get_collection
     coll = get_collection("co_launch_projects")
     if coll is None:
-        return {"status": "ok", "message": "No database"}
+        raise HTTPException(503, "Database unavailable")
 
     proj = None
     if body.projectId:
@@ -2658,18 +2751,16 @@ def record_visit_universal(body: TrackVisitRequest, db: Session = Depends(get_db
     if not proj and body.slug:
         clean_slug = body.slug.lower().strip()
         proj = coll.find_one({"$or": [
-            {"product_name": {"$regex": clean_slug, "$options": "i"}},
-            {"productName": {"$regex": clean_slug, "$options": "i"}},
+            {"slug": clean_slug},
+            {"id": clean_slug},
             {"creator_handle": clean_slug},
             {"creatorHandle": clean_slug},
-            {"id": clean_slug}
+            {"creator_handle": f"@{clean_slug}"},
+            {"creatorHandle": f"@{clean_slug}"},
         ]})
 
     if not proj:
-        proj = coll.find_one()
-
-    if not proj:
-        return {"status": "ok", "message": "No active project"}
+        raise HTTPException(404, "Project not found")
 
     telem = proj.get("telemetry") or {}
     telem["views"] = int(telem.get("views") or 0) + 1
@@ -2707,7 +2798,12 @@ def record_visit_universal(body: TrackVisitRequest, db: Session = Depends(get_db
 
     proj["telemetry"] = telem
     _save_mongo_project(proj)
-    return _normalize_mongo_project_dict(proj)
+    return {
+        "status": "ok",
+        "projectId": str(proj.get("id") or proj.get("_id") or ""),
+        "views": telem.get("views"),
+        "visitors": telem.get("visitors"),
+    }
 
 
 @router.post("/{project_id}/track-visit")
@@ -2718,8 +2814,21 @@ def track_project_visit(project_id: str, body: TrackVisitRequest, db: Session = 
 
 
 @router.post("/record-preorder")
-def record_preorder_universal(body: RecordPreorderRequest, db: Session = Depends(get_db)):
-    """Universal public pre-order recorder directly in MongoDB Atlas."""
+def record_preorder_universal(
+    body: RecordPreorderRequest,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_auth),
+):
+    """
+    Direct pre-order recording is restricted to Operators for simulation testing only.
+    Real customer pre-orders are processed strictly via verified Stripe webhooks.
+    """
+    if user.role != AuthRole.OPERATOR:
+        raise HTTPException(
+            status_code=403,
+            detail="Direct unverified preorder recording is disabled. Real payments are processed exclusively via Stripe webhook.",
+        )
+
     from app.mongodb import get_collection
     coll = get_collection("co_launch_projects")
     if coll is None:
@@ -2732,21 +2841,19 @@ def record_preorder_universal(body: RecordPreorderRequest, db: Session = Depends
     if not proj and body.slug:
         clean_slug = body.slug.lower().strip()
         proj = coll.find_one({"$or": [
-            {"product_name": {"$regex": clean_slug, "$options": "i"}},
-            {"productName": {"$regex": clean_slug, "$options": "i"}},
+            {"slug": clean_slug},
+            {"id": clean_slug},
             {"creator_handle": clean_slug},
             {"creatorHandle": clean_slug},
-            {"id": clean_slug}
+            {"creator_handle": f"@{clean_slug}"},
+            {"creatorHandle": f"@{clean_slug}"},
         ]})
-
-    if not proj:
-        proj = coll.find_one()
 
     if not proj:
         raise HTTPException(404, "No active co-launch project found to record reservation")
 
     telem = proj.get("telemetry") or {}
-    res_id = f"res_{int(datetime.utcnow().timestamp()*1000)}"
+    res_id = f"res_sim_{int(datetime.utcnow().timestamp()*1000)}"
     timestamp_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
     reservation_item = {
@@ -2755,11 +2862,12 @@ def record_preorder_universal(body: RecordPreorderRequest, db: Session = Depends
         "email": body.email,
         "amount": float(body.amount),
         "tier": body.tier or "Founding Pass",
-        "paymentMethod": body.paymentMethod or "Stripe",
+        "paymentMethod": body.paymentMethod or "Simulation",
         "channel": body.channel or "Direct / Other",
         "txId": body.txId or f"tx_{res_id}",
         "timestamp": timestamp_str,
-        "status": "Paid"
+        "status": "Paid",
+        "simulated": True,
     }
 
     cur_res = list(telem.get("reservations") or [])
@@ -2772,9 +2880,8 @@ def record_preorder_universal(body: RecordPreorderRequest, db: Session = Depends
     proj["current_presales"] = new_revenue
     proj["reservations"] = cur_res
 
-    cur_visitors = max(int(telem.get("visitors", 0)), len(cur_res) * 5, 1)
-    telem["visitors"] = cur_visitors
-    proj["visitors"] = cur_visitors
+    # Do not fabricate visitors; keep existing visitor count
+    cur_visitors = int(telem.get("visitors", 0))
     conv = round((len(cur_res) / cur_visitors) * 100, 1) if cur_visitors > 0 else 0.0
     telem["conversionRate"] = conv
     proj["conversionRate"] = conv
@@ -2788,10 +2895,10 @@ def record_preorder_universal(body: RecordPreorderRequest, db: Session = Depends
     act_logs = list(meta.get("activity_logs") or [])
     act_item = {
         "id": f"act_{int(datetime.utcnow().timestamp()*1000)}",
-        "action": "Customer Pre-Order Received",
-        "details": f"${body.amount:.0f} {body.tier} reserved by {body.name} ({body.email}) via {body.paymentMethod or 'Stripe'}",
-        "category": "revenue",
-        "timestamp": timestamp_str
+        "action": "Simulated Pre-Order Recorded",
+        "details": f"${body.amount:.0f} {body.tier} simulated for {body.name} ({body.email})",
+        "category": "revenue_simulation",
+        "timestamp": timestamp_str,
     }
     act_logs.insert(0, act_item)
     meta["activity_logs"] = act_logs[:50]
@@ -2837,8 +2944,6 @@ def record_survey_response_universal(
                 {"product_name": {"$regex": slug_regex, "$options": "i"}},
                 {"productName": {"$regex": slug_regex, "$options": "i"}},
             ]})
-        if not doc:
-            doc = coll.find_one()
 
     if not doc:
         raise HTTPException(404, "No active co-launch project found to record survey response")
@@ -2923,7 +3028,12 @@ def record_survey_response_universal(
 
 
 @router.delete("/{project_id}/survey-response/{response_id}")
-def delete_survey_response(project_id: str, response_id: str, db: Session = Depends(get_db)):
+def delete_survey_response(
+    project_id: str,
+    response_id: str,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
+):
     """Delete a single survey response and recalculate question response counts in MongoDB Atlas."""
     doc = _find_mongo_project(project_id)
     if not doc:
@@ -2985,7 +3095,11 @@ def delete_survey_response(project_id: str, response_id: str, db: Session = Depe
 
 
 @router.delete("/{project_id}/survey-responses")
-def clear_all_survey_responses(project_id: str, db: Session = Depends(get_db)):
+def clear_all_survey_responses(
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
+):
     """Clear all survey responses and reset question response counts to 0 in MongoDB Atlas."""
     doc = _find_mongo_project(project_id)
     if not doc:
@@ -3039,7 +3153,12 @@ def clear_all_survey_responses(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{project_id}/log-activity")
-def log_admin_activity(project_id: str, body: LogActivityRequest, db: Session = Depends(get_db)):
+def log_admin_activity(
+    project_id: str,
+    body: LogActivityRequest,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_project_access),
+):
     """Record an audit trail action conducted by the admin or AI agent."""
     mongo_doc = _find_mongo_project(project_id)
     proj = db.get(CoLaunchProject, project_id) if db else None
@@ -3084,78 +3203,50 @@ def log_admin_activity(project_id: str, body: LogActivityRequest, db: Session = 
 
 @router.get("/by-slug/{slug}")
 def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
-    """Lookup active co-launch project by slug, product name, or creator handle from MongoDB Atlas."""
-    import re
+    """
+    Lookup active co-launch project by slug or creator handle from MongoDB Atlas.
+    Returns a public-safe projection (no emails, no revenue, no operator notes).
+    """
     clean_slug = slug.lower().strip()
-    alpha_slug = re.sub(r"[^a-zA-Z0-9]", "", clean_slug)
 
     # 1. Prioritize MongoDB co_launch_projects
     try:
         from app.mongodb import get_collection
         coll = get_collection("co_launch_projects")
         if coll is not None:
-            slug_regex = clean_slug.replace("-", "[- ]")
-            query_conditions = [
-                {"id": slug},
-                {"id": clean_slug},
+            doc = coll.find_one({"$or": [
                 {"slug": clean_slug},
+                {"id": clean_slug},
                 {"creator_handle": clean_slug},
-                {"creator_handle": f"@{clean_slug}"},
                 {"creatorHandle": clean_slug},
+                {"creator_handle": f"@{clean_slug}"},
                 {"creatorHandle": f"@{clean_slug}"},
-                {"creator_handle": {"$regex": f"^{re.escape(clean_slug)}$", "$options": "i"}},
-                {"creatorHandle": {"$regex": f"^{re.escape(clean_slug)}$", "$options": "i"}},
-                {"product_name": {"$regex": slug_regex, "$options": "i"}},
-                {"productName": {"$regex": slug_regex, "$options": "i"}},
-                {"title": {"$regex": slug_regex, "$options": "i"}},
-            ]
-            if alpha_slug:
-                query_conditions.extend([
-                    {"product_name": {"$regex": alpha_slug, "$options": "i"}},
-                    {"productName": {"$regex": alpha_slug, "$options": "i"}},
-                    {"title": {"$regex": alpha_slug, "$options": "i"}},
-                    {"slug": {"$regex": alpha_slug, "$options": "i"}},
-                ])
-
-            doc = coll.find_one({"$or": query_conditions})
-
-            # If still not found by direct query, perform in-memory normalized comparison across all documents
-            if not doc and alpha_slug:
-                all_docs = list(coll.find({}))
-                for cand in all_docs:
-                    c_slug = re.sub(r"[^a-zA-Z0-9]", "", str(cand.get("slug") or "")).lower()
-                    c_name = re.sub(r"[^a-zA-Z0-9]", "", str(cand.get("productName") or cand.get("product_name") or cand.get("title") or "")).lower()
-                    c_handle = re.sub(r"[^a-zA-Z0-9]", "", str(cand.get("creatorHandle") or cand.get("creator_handle") or "")).lower()
-                    c_id = str(cand.get("id") or "").lower()
-                    if alpha_slug in (c_slug, c_name, c_handle, c_id) or (c_name and alpha_slug in c_name) or (c_slug and alpha_slug in c_slug):
-                        doc = cand
-                        break
-
-            # Fallback to first project if available
-            if not doc:
-                doc = coll.find_one()
-
+            ]})
             if doc:
-                ws_coll = get_collection("workflow_states")
-                ws_doc = ws_coll.find_one({"$or": [{"_id": "default"}, {"id": "default"}]}) if ws_coll is not None else None
-                def_fee = 199.0
-                if ws_doc:
-                    def_fee = float(ws_doc.get("default_pass_price") or (ws_doc.get("extra_state") or {}).get("default_pass_price") or 199.0)
-                return _normalize_mongo_project_dict(doc, def_fee)
+                return _filter_public_project_dict(doc)
     except Exception as e:
         logger.debug(f"[MongoDB] get_project_by_slug notice: {e}")
 
-    # 2. Secondary fallback: SQLite session
+    # 2. Secondary fallback: SQLite session (exact match only)
     try:
         sql_proj = db.query(CoLaunchProject).filter(
             (CoLaunchProject.id == slug) |
-            (CoLaunchProject.creator_handle.ilike(f"%{clean_slug}%")) |
-            (CoLaunchProject.product_name.ilike(f"%{clean_slug}%"))
+            (CoLaunchProject.creator_handle == clean_slug) |
+            (CoLaunchProject.creator_handle == f"@{clean_slug}")
         ).first()
-        if not sql_proj:
-            sql_proj = db.query(CoLaunchProject).first()
         if sql_proj:
-            return _format_project_response(sql_proj)
+            return {
+                "id": sql_proj.id,
+                "slug": getattr(sql_proj, "slug", "") or sql_proj.id,
+                "productName": sql_proj.product_name or "Co-Launch Venture",
+                "productTagline": sql_proj.product_tagline or "",
+                "brandColor": getattr(sql_proj, "brand_color", "#C81E3C"),
+                "creatorName": sql_proj.creator_name or "",
+                "creatorHandle": sql_proj.creator_handle or "",
+                "creatorAvatar": sql_proj.creator_avatar or "",
+                "currentPhase": sql_proj.current_phase or 1,
+                "status": sql_proj.status or "active",
+            }
     except Exception as e:
         logger.debug(f"[SQLite] get_project_by_slug notice: {e}")
 
@@ -3164,8 +3255,11 @@ def get_project_by_slug(slug: str, db: Session = Depends(get_db)):
 
 @router.delete("")
 @router.delete("/")
-def delete_all_projects(db: Session = Depends(get_db)):
-    """Delete all co-launch projects directly from MongoDB Atlas."""
+def delete_all_projects(
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
+):
+    """Delete all co-launch projects directly from MongoDB Atlas. Restricted to operators."""
     from app.mongodb import get_collection
     coll = get_collection("co_launch_projects")
     count = 0
@@ -3176,7 +3270,25 @@ def delete_all_projects(db: Session = Depends(get_db)):
 
 
 @router.delete("/{project_id}")
-def delete_project(project_id: str, db: Session = Depends(get_db)):
+def delete_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_operator),
+):
+    """Delete a co-launch project directly from MongoDB Atlas. Restricted to operators."""
+    from app.mongodb import get_collection
+    coll = get_collection("co_launch_projects")
+    if coll is not None:
+        clean_target = project_id.replace("@", "").lower().strip()
+        coll.delete_one({"$or": [
+            {"_id": project_id},
+            {"id": project_id},
+            {"creator_id": project_id},
+            {"creatorId": project_id},
+            {"creator_handle": clean_target},
+            {"creatorHandle": clean_target},
+        ]})
+    return {"status": "success", "message": f"Project '{project_id}' deleted."}
     """Delete a co-launch project directly from MongoDB Atlas."""
     from app.mongodb import get_collection
     coll = get_collection("co_launch_projects")

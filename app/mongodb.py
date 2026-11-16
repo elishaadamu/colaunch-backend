@@ -41,7 +41,7 @@ def get_mongo_uri() -> str:
         except Exception:
             pass
     if not uri:
-        uri = "mongodb+srv://creatorforgeweb_db_user:radLPHdUYy7g3tGB@cluster0.nnewamw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+        raise RuntimeError("MONGODB_URI environment variable is required and must not be empty.")
     return uri.strip().strip('"\'')
 
 
