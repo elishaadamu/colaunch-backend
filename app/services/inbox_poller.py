@@ -51,7 +51,16 @@ def _clean_email_body(body: str) -> str:
     pattern = re.compile(r'\nOn\s+.*wrote:\s*', re.IGNORECASE | re.DOTALL)
     match = pattern.search(body)
     if match:
-        body = body[:match.start()]
+        top_part = body[:match.start()].strip()
+        if top_part:
+            body = top_part
+        else:
+            # User replied below the quoted text — extract non-quoted lines below
+            after_quote = body[match.end():]
+            cleaned_after = [line for line in after_quote.split('\n') if not line.strip().startswith('>')]
+            bottom_part = '\n'.join(cleaned_after).strip()
+            if bottom_part:
+                body = bottom_part
         
     lines = body.split('\n')
     cleaned = []
@@ -248,12 +257,22 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         logger.info(f"[Inbox Poller] Creator {matched_creator.handle} ({creator_id}) has no sent outreach message in this run. Ignoring unaddressed email from {from_email_clean}.")
         return None
 
-    # Timing guard: The email received in Gmail MUST be sent after or around the time outreach was sent
-    if msg_datetime and sent_outreach.sent_at:
-        msg_dt_naive = msg_datetime.replace(tzinfo=None) if msg_datetime.tzinfo else msg_datetime
-        sent_at_naive = sent_outreach.sent_at.replace(tzinfo=None) if sent_outreach.sent_at.tzinfo else sent_outreach.sent_at
-        if msg_dt_naive < (sent_at_naive - timedelta(seconds=60)):
-            logger.info(f"[Inbox Poller] Email from {from_email_clean} dated {msg_dt_naive} was sent before outreach was sent ({sent_at_naive}). Ignoring stale email.")
+    # Timing guard: ensure reply was not sent before outreach was initiated
+    if msg_datetime and sent_outreach.sent_at and not (cid_match or cand_handle):
+        from datetime import timezone
+        if msg_datetime.tzinfo is not None:
+            msg_dt_utc = msg_datetime.astimezone(timezone.utc).replace(tzinfo=None)
+        else:
+            msg_dt_utc = msg_datetime
+        earliest_outreach = db.query(OutreachMessage).filter(
+            OutreachMessage.creator_id == creator_id,
+            OutreachMessage.status == "sent"
+        ).order_by(OutreachMessage.sent_at.asc()).first()
+        earliest_sent = (earliest_outreach.sent_at if earliest_outreach else sent_outreach.sent_at)
+        sent_at_utc = earliest_sent.replace(tzinfo=None) if earliest_sent.tzinfo else earliest_sent
+        # Allow 24 hours of clock skew/timezone drift
+        if msg_dt_utc < (sent_at_utc - timedelta(hours=24)):
+            logger.info(f"[Inbox Poller] Email from {from_email_clean} dated {msg_dt_utc} was sent before earliest outreach ({sent_at_utc}). Ignoring stale email.")
             return None
 
     # Find or create latest thread for this specific creator
@@ -295,13 +314,17 @@ def poll_inbox_sync(wait_timeout: float = 0.0) -> dict:
         mail.login(settings.GOOGLE_EMAIL, settings.GOOGLE_APP_PASSWORD.replace(" ", ""))
         mail.select("INBOX")
         
-        # Search recent messages (fetch last 10 message IDs for instant response)
-        status, messages = mail.search(None, "ALL")
-        if status != "OK" or not messages[0]:
+        # Search messages from the last 14 days (or fallback to ALL if empty)
+        since_date = (datetime.utcnow() - timedelta(days=14)).strftime("%d-%b-%Y")
+        status, messages = mail.search(None, f'(SINCE "{since_date}")')
+        if status != "OK" or not messages or not messages[0]:
+            status, messages = mail.search(None, "ALL")
+        if status != "OK" or not messages or not messages[0]:
             return {"status": "success", "new_replies": 0, "processed": 0}
             
         all_ids = messages[0].split()
-        email_ids = all_ids[-10:]  # Check last 10 emails
+        # Fetch up to the last 100 emails to guarantee no replies are missed across days/hours
+        email_ids = all_ids[-100:]
         status, msg_data = mail.fetch(b",".join(email_ids), "(RFC822)")
         if status == "OK" and msg_data:
             for response_part in msg_data:

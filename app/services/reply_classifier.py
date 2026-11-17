@@ -181,7 +181,9 @@ def classify_reply(
     ]
     pos_patterns = [
         "yes", "interested", "would be interested", "i would be interested", "i'm interested", "im interested",
+        "i am interested", "interested, let's proceed", "interested let's proceed", "let's proceed", "lets proceed", "proceed",
         "love to", "sounds great", "sounds good", "sounds awesome", "sounds amazing", "looks great", "looks good",
+        "sounds interesting",
         "sure", "sure thing", "sure, send it over", "send it over", "send over", "send it", "go ahead",
         "go ahead with the process", "let's go ahead", "lets go ahead", "ahead with the process",
         "let's talk", "lets talk", "let's do it", "lets do it", "let's connect", "lets connect",
@@ -274,6 +276,52 @@ def classify_reply(
                 existing_notes["reply_text"] = reply.body
                 existing_notes["reply_subject"] = reply.subject
                 creator.discovery_notes = json.dumps(existing_notes)
+
+                # Sync to MongoDB Atlas creators collection (source of truth for list_creators)
+                try:
+                    from app.mongodb import get_collection
+                    from bson import ObjectId
+                    coll = get_collection("creators")
+                    if coll is not None:
+                        c_id_str = str(creator.id).strip()
+                        c_handle_str = (creator.handle or "").lstrip("@").strip()
+                        or_filters = []
+                        if c_id_str:
+                            or_filters.append({"id": c_id_str})
+                            if ObjectId.is_valid(c_id_str):
+                                or_filters.append({"_id": ObjectId(c_id_str)})
+                        if c_handle_str:
+                            or_filters.append({"handle": c_handle_str})
+                            or_filters.append({"handle": f"@{c_handle_str}"})
+                        if or_filters:
+                            mongo_status = "in_review" if reply.classification == "interested" else ("rejected" if reply.classification == "not_interested" else "replied")
+                            existing_doc = coll.find_one({"$or": or_filters})
+                            m_notes = {}
+                            if existing_doc and existing_doc.get("discovery_notes"):
+                                try:
+                                    m_notes = json.loads(existing_doc["discovery_notes"]) if isinstance(existing_doc["discovery_notes"], str) else existing_doc["discovery_notes"]
+                                except Exception:
+                                    m_notes = {}
+                            m_notes["reply_classification"] = reply.classification
+                            m_notes["reply_text"] = reply.body
+                            m_notes["reply_subject"] = reply.subject
+
+                            coll.update_many(
+                                {"$or": or_filters},
+                                {
+                                    "$set": {
+                                        "reply_classification": reply.classification,
+                                        "reply_text": reply.body,
+                                        "reply_subject": reply.subject,
+                                        "status": mongo_status,
+                                        "has_replied": True,
+                                        "discovery_notes": json.dumps(m_notes),
+                                        "updated_at": datetime.utcnow().isoformat(),
+                                    }
+                                }
+                            )
+                except Exception as mongo_err:
+                    print(f"[Reply Classifier] MongoDB sync notice: {mongo_err}")
 
     db.commit()
     return reply
