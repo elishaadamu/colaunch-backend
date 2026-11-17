@@ -429,33 +429,11 @@ def _clean_and_extract_ref_tokens(raw_text: str) -> tuple:
 # Concepts (Step 5 & 6)
 # ──────────────────────────────────────────────────────────────────────────────
 def _build_concept_landing_url(concept: Dict[str, Any], creator_name: str = "", index: int = 0) -> str:
-    """Public landing-page URL for a concept (explicit URL > appUrl > portal preview)."""
+    """Public landing-page URL for a concept, matching Step 5 ConceptLandingPage."""
     frontend_base = _get_frontend_base()
-
-    mockup = concept.get("mockup") if isinstance(concept.get("mockup"), dict) else {}
-    explicit_url = (
-        concept.get("landingPageUrl")
-        or concept.get("landing_page_url")
-        or mockup.get("previewUrl")
-        or mockup.get("landingUrl")
-        or ""
-    ).strip()
-
-    if explicit_url and explicit_url.startswith("http"):
-        return explicit_url
-    if explicit_url and explicit_url.startswith("/"):
-        return f"{frontend_base}{explicit_url}"
-
-    app_url = (concept.get("appUrl") or mockup.get("appUrl") or "").strip()
-
-    if app_url and "." in app_url and not app_url.startswith("http"):
-        return f"https://{app_url}"
-    if app_url and app_url.startswith("http"):
-        return app_url
-
     c_slug = _concept_slug(str(concept.get("name") or concept.get("title") or ""), index)
     creator_slug = re.sub(r"[^a-z0-9\-]", "", (creator_name or "creator").lower().replace(" ", "-")) or "creator"
-    return f"{frontend_base}/preorder/{creator_slug}?concept={c_slug}"
+    return f"{frontend_base}/concept/{creator_slug}?concept={c_slug}"
 
 
 def _build_concept_card_image_url(
@@ -558,6 +536,7 @@ def _render_single_concept_block(
     key_features = [str(f).strip() for f in raw_features if str(f).strip()][:4] if isinstance(raw_features, list) else []
 
     concept_img = _build_concept_card_image_url(concept, accent_hex, key_features, index=index)
+    landing_url = _build_concept_landing_url(concept, creator_name=creator_name, index=index)
 
     contact_email = get_contact_reply_email()
     mailto_subj = quote(f"Interested in Concept {index + 1}: {app_name}")
@@ -578,8 +557,10 @@ def _render_single_concept_block(
     if concept_img:
         img_html = (
             '<div style="margin:0 0 18px 0;">'
+            f'<a href="{html.escape(landing_url)}" target="_blank" style="display:block;text-decoration:none;" title="Click to view live interactive landing page">'
             f'<img src="{html.escape(concept_img)}" alt="{html.escape(app_name)} preview" width="520" '
             f'style="width:100%;max-width:520px;height:auto;border-radius:10px;border:2px solid {INK};display:block;" />'
+            '</a>'
             '</div>'
         )
 
@@ -651,7 +632,9 @@ def _render_single_concept_block(
         f'<tr><td bgcolor="#10131A" style="background-color:#10131A;padding:18px 20px;border-bottom:3px dashed {accent_hex};">'
         '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0"><tr>'
         f'<td align="left" valign="middle">{_tag(f"Concept {index + 1} of {total_concepts}", bg=btn_bg, color=accent_ink, border=btn_bg)}</td>'
-        f'<td align="right" valign="middle" style="font-family:{F_TYPE};font-size:11px;font-weight:700;color:#6FCF9B;">Fit {score}/100</td>'
+        f'<td align="right" valign="middle">'
+        f'<a href="{html.escape(landing_url)}" target="_blank" style="font-family:{F_TYPE};font-size:11px;font-weight:700;color:{WHITE};background-color:{accent_hex};padding:5px 12px;border-radius:6px;text-decoration:none;display:inline-block;">View Live Landing Page &rarr;</a>'
+        f'</td>'
         '</tr></table>'
         f'<div style="font-family:{F_HEAD};font-size:24px;font-weight:700;color:{WHITE};margin-top:10px;line-height:1.2;">'
         f'{html.escape(app_name)}</div>'
@@ -662,9 +645,12 @@ def _render_single_concept_block(
         f'{img_html}{problem_html}{features_html}{audience_html}{stats}'
         f'{_dash_rule(RULE, "16px 0 16px 0")}'
         '<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0"><tr>'
-        f'<td class="stack btn-full" valign="middle">{_button(mailto_href, f"Select Concept {index + 1}: {html.escape(app_name)} &rarr;", bg=btn_bg, color=accent_ink)}</td>'
-        f'<td class="stack stack-gap" align="right" valign="middle" style="text-align:right;font-size:12px;color:{BODY_TXT};">'
-        f'Or reply <strong style="color:{INK};">&ldquo;Concept {index + 1}&rdquo;</strong> to proceed</td>'
+        f'<td class="stack" valign="middle" style="padding-right:8px;padding-bottom:6px;">'
+        f'{_button(landing_url, f"View Live Landing Page &rarr;", bg=btn_bg, color=accent_ink)}'
+        '</td>'
+        f'<td class="stack" valign="middle" style="padding-bottom:6px;">'
+        f'{_button(mailto_href, f"Select Concept {index + 1} &rarr;", bg=PAPER, color=INK)}'
+        '</td>'
         '</tr></table>'
         '</td></tr></table>'
     )
