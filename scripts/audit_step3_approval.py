@@ -22,10 +22,8 @@ def run_audit():
 
     # 1. Try MongoDB Atlas
     try:
-        from app.mongodb import get_mongo_client
-        client = get_mongo_client()
-        db = client.get_default_database() or client["creator_forge"]
-        col = db["co_launch_projects"]
+        from app.mongodb import get_collection
+        col = get_collection("co_launch_projects")
         projects = list(col.find({}))
         print(f"Connected to MongoDB Atlas: retrieved {len(projects)} projects.")
     except Exception as e:
