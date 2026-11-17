@@ -6,7 +6,7 @@ import logging
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -498,6 +498,21 @@ class RecordPreorderRequest(BaseModel):
     paymentMethod: Optional[str] = "Stripe"
     channel: Optional[str] = "direct"
     txId: Optional[str] = None
+
+
+class CreateCheckoutSessionRequest(BaseModel):
+    projectId: Optional[str] = None
+    slug: Optional[str] = None
+    creatorHandle: Optional[str] = None
+    tier: Optional[str] = "Founding Member Pass"
+    tierName: Optional[str] = None
+    amount: Optional[float] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+    channel: Optional[str] = "Direct / Other"
+    ref: Optional[str] = None
+    successUrl: Optional[str] = None
+    cancelUrl: Optional[str] = None
 
 
 class RecordSurveyResponseRequest(BaseModel):
@@ -3058,6 +3073,123 @@ def record_preorder_universal(
 
     _save_mongo_project(proj)
     return _normalize_mongo_project_dict(proj)
+
+
+@router.post("/create-checkout-session")
+@router.post("/{project_id}/create-checkout-session")
+def create_project_checkout_session(
+    body: CreateCheckoutSessionRequest,
+    project_id: Optional[str] = None,
+):
+    """
+    Public endpoint to create a real Stripe Checkout Session for a pre-order reservation.
+    If STRIPE_SECRET_KEY is configured in Atlas/environment, generates real Stripe session.
+    If missing, returns test-mode checkout redirect URL with test flag.
+    """
+    from app.services.stripe_service import create_checkout_session
+
+    target_id = project_id or body.projectId or body.slug or body.creatorHandle
+    if not target_id:
+        raise HTTPException(400, "Missing projectId or slug for checkout")
+
+    proj = _find_mongo_project(target_id)
+    if not proj:
+        from app.mongodb import get_collection
+        coll = get_collection("co_launch_projects")
+        if coll is not None:
+            clean = str(target_id).replace("@", "").lower().strip()
+            proj = coll.find_one({"$or": [
+                {"slug": clean},
+                {"id": clean},
+                {"creator_handle": clean},
+                {"creatorHandle": clean},
+                {"creator_handle": f"@{clean}"},
+                {"creatorHandle": f"@{clean}"},
+            ]})
+
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    p_id = str(proj.get("id") or proj.get("_id"))
+    product_name = proj.get("productName") or proj.get("product_name") or "CoLaunch Product"
+    tier_name = body.tierName or body.tier or "Founding Member Pass"
+
+    # Resolve amount
+    resolved_amount = 0.0
+    if body.amount is not None and float(body.amount) > 0:
+        resolved_amount = float(body.amount)
+    else:
+        campaign_kit = proj.get("campaignKit") or proj.get("campaign_kit") or {}
+        pricing_tiers = campaign_kit.get("pricingTiers") or []
+        for pt in pricing_tiers:
+            if pt.get("name", "").lower() == tier_name.lower():
+                try:
+                    resolved_amount = float(pt.get("price", 0))
+                    break
+                except (ValueError, TypeError):
+                    pass
+        if resolved_amount <= 0:
+            for k in ("foundingPrice", "presalePrice", "price", "pricing"):
+                val = campaign_kit.get(k) or proj.get(k)
+                if val:
+                    num_match = re.search(r"(\d+(?:\.\d+)?)", str(val))
+                    if num_match:
+                        resolved_amount = float(num_match.group(1))
+                        break
+        if resolved_amount <= 0:
+            resolved_amount = 49.0
+
+    ref_tag = body.ref or body.channel or "direct"
+    session_res = create_checkout_session(
+        project_id=p_id,
+        product_name=product_name,
+        amount=resolved_amount,
+        tier_name=tier_name,
+        customer_name=body.name,
+        customer_email=body.email,
+        channel=body.channel,
+        ref=ref_tag,
+        success_url=body.successUrl,
+        cancel_url=body.cancelUrl,
+        metadata={
+            "creatorHandle": proj.get("creatorHandle") or proj.get("creator_handle") or "",
+            "slug": proj.get("slug") or "",
+        }
+    )
+    return session_res
+
+
+@router.post("/stripe-webhook")
+async def stripe_webhook(request: Request):
+    """
+    Public webhook receiver called by Stripe on events (e.g. checkout.session.completed).
+    Verifies cryptographic signature if STRIPE_WEBHOOK_SECRET is set.
+    Writes verified presale event to validation_events collection, updates telemetry,
+    and updates project threshold without fabricating visitors.
+    """
+    from app.services.stripe_service import (
+        verify_and_construct_webhook_event,
+        process_successful_checkout,
+    )
+
+    payload_bytes = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    try:
+        event = verify_and_construct_webhook_event(payload_bytes, sig_header)
+    except ValueError as e:
+        logger.warning(f"[Stripe Webhook] Verification error: {e}")
+        raise HTTPException(400, detail=str(e))
+
+    event_type = event.get("type")
+    logger.info(f"[Stripe Webhook] Received event type: {event_type}")
+
+    if event_type == "checkout.session.completed":
+        session_obj = event.get("data", {}).get("object", {})
+        result = process_successful_checkout(session_obj)
+        return {"status": "ok", "result": result}
+
+    return {"status": "ignored", "event_type": event_type}
 
 
 @router.post("/record-survey-response")
