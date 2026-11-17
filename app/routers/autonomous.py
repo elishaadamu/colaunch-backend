@@ -1522,7 +1522,7 @@ Return valid JSON only matching the structure above."""
                 "name": "FocusPulse",
                 "tagline": "Daily guided neuro-routine to rebuild deep focus and reduce overwhelm",
                 "description": "A structured daily exercise runner that guides you through physical and breathing drills designed to reset cognitive clarity.",
-                "brandColor": "#10B981",
+                "brandColor": "#c81e3c",
                 "demographicAlignment": "Subscribers battling daily digital fatigue and mental fog",
                 "problem": "You lose momentum switching between fragmented exercises and tracking logs.",
                 "customer": "Mindfulness practitioners and focus-driven learners",
