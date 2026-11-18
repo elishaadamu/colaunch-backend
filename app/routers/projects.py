@@ -725,10 +725,140 @@ def parse_concept_pricing_details(pricing_str: str) -> Dict[str, Any]:
     }
 
 
+
+# ── Survey responses: own collection, so no project save can wipe them ────────────────────
+# Every response lives as one document in `survey_responses` ({_id: response id, project_id}).
+# Copies embedded in the project (surveyData, campaignKit, metadataInfo, validation_campaigns)
+# are mirrors only; deleting sets `deleted: True` so a stale embedded copy can't bring it back.
+def _survey_containers(d: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out = []
+    for key in ("surveyData",):
+        if isinstance(d.get(key), dict):
+            out.append(d[key])
+    for vk in ("validationCampaign", "validation_campaign"):
+        vc = d.get(vk)
+        if isinstance(vc, dict):
+            for sk in ("researchSurvey", "research_survey"):
+                if isinstance(vc.get(sk), dict):
+                    out.append(vc[sk])
+    for kk in ("campaignKit", "campaign_kit"):
+        kit = d.get(kk)
+        if isinstance(kit, dict) and isinstance(kit.get("research_survey"), dict):
+            out.append(kit["research_survey"])
+    for mk in ("metadataInfo", "metadata_info"):
+        meta = d.get(mk)
+        if isinstance(meta, dict) and isinstance(meta.get("research_survey"), dict):
+            out.append(meta["research_survey"])
+    return out
+
+
+def _survey_support_stats(responses: List[Dict[str, Any]]) -> Dict[str, Any]:
+    stats = {"yes": 0, "maybe": 0, "no": 0, "waitlist": 0, "deposit": 0, "founding": 0, "consented": 0, "pricePoints": {}}
+    for r in responses:
+        sp = r.get("support") or {}
+        if sp.get("decision") in ("yes", "maybe", "no"):
+            stats[sp["decision"]] += 1
+        if sp.get("level") in ("waitlist", "deposit", "founding"):
+            stats[sp["level"]] += 1
+        if sp.get("consent"):
+            stats["consented"] += 1
+        if sp.get("pricePoint"):
+            stats["pricePoints"][sp["pricePoint"]] = stats["pricePoints"].get(sp["pricePoint"], 0) + 1
+    return stats
+
+
+def _sync_survey_responses(d: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return the project's live survey responses (newest first) and mirror them into every
+    place the frontend reads from. Embedded legacy copies are migrated into the collection."""
+    pid = str(d.get("id") or d.get("_id") or "")
+    if not pid:
+        return []
+    try:
+        from app.mongodb import get_collection
+        sr_coll = get_collection("survey_responses")
+        vc_coll = get_collection("validation_campaigns")
+    except Exception:
+        return []
+    if sr_coll is None:
+        return []
+
+    embedded: List[Dict[str, Any]] = []
+    for cont in _survey_containers(d):
+        embedded.extend([r for r in (cont.get("responses") or []) if isinstance(r, dict)])
+    for key in ("surveyResponses",):
+        embedded.extend([r for r in (d.get(key) or []) if isinstance(r, dict)])
+    for mk in ("metadataInfo", "metadata_info"):
+        meta = d.get(mk)
+        if isinstance(meta, dict):
+            embedded.extend([r for r in (meta.get("survey_responses") or []) if isinstance(r, dict)])
+    vc_doc = None
+    try:
+        vc_doc = vc_coll.find_one({"$or": [{"_id": pid}, {"project_id": pid}]}) if vc_coll is not None else None
+        if vc_doc:
+            embedded.extend([r for r in ((vc_doc.get("research_survey") or {}).get("responses") or []) if isinstance(r, dict)])
+    except Exception:
+        pass
+
+    try:
+        stored = {str(r["_id"]): r for r in sr_coll.find({"project_id": pid})}
+        for r in embedded:
+            rid = str(r.get("id") or "")
+            if rid and rid not in stored:
+                item = {k: v for k, v in r.items() if k != "_id"}
+                sr_coll.update_one({"_id": rid}, {"$setOnInsert": {**item, "project_id": pid}}, upsert=True)
+                stored[rid] = {**item, "_id": rid, "project_id": pid}
+    except Exception as e:
+        logger.error(f"[MongoDB] survey_responses sync error: {e}")
+        return []
+
+    live = []
+    for rid, r in stored.items():
+        if r.get("deleted"):
+            continue
+        item = {k: v for k, v in r.items() if k not in ("_id", "project_id", "deleted")}
+        item["id"] = rid
+        live.append(item)
+    live.sort(key=lambda r: str(r.get("submittedAt") or r.get("date") or ""), reverse=True)
+
+    # Questions: keep the first non-empty list from any container (or validation_campaigns)
+    questions = None
+    for cont in _survey_containers(d) + ([vc_doc.get("research_survey")] if vc_doc and isinstance(vc_doc.get("research_survey"), dict) else []):
+        if cont.get("questions"):
+            questions = cont["questions"]
+            break
+    if questions:
+        for q in questions:
+            qid = q.get("id")
+            q["responseCount"] = sum(1 for r in live if str((r.get("answers") or {}).get(qid) or "").strip())
+
+    stats = _survey_support_stats(live)
+    containers = _survey_containers(d)
+    if not containers:
+        d["surveyData"] = {}
+        containers = [d["surveyData"]]
+    for cont in containers:
+        cont["responses"] = live
+        cont["supportStats"] = stats
+        if questions and not cont.get("questions"):
+            cont["questions"] = questions
+    d["surveyResponses"] = live
+    d["surveySupportStats"] = stats
+    for mk in ("metadataInfo", "metadata_info"):
+        if isinstance(d.get(mk), dict):
+            d[mk]["survey_responses"] = live
+    return live
+
+
 def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) -> Dict[str, Any]:
     if not d:
         return d
+    if not d.get("id") and d.get("_id"):
+        d["id"] = d["_id"]
     d.pop("_id", None)
+    try:
+        _sync_survey_responses(d)
+    except Exception as e:
+        logger.error(f"[Survey] sync notice: {e}")
 
     # 1. Normalize pricing / DIY pass price
     cur_fee = d.get("diyFee") if d.get("diyFee") is not None else d.get("diyPassPrice")
@@ -2661,13 +2791,11 @@ def toggle_autonomous_delivery_endpoint(
             vc_coll = get_collection("validation_campaigns")
             if vc_coll is not None:
                 doc_id = str(p_doc.get("_id") or p_doc.get("id") or project_id)
-                vc_doc = {
-                    "_id": doc_id,
+                vc_coll.update_one({"_id": doc_id}, {"$set": {
                     "project_id": doc_id,
                     "campaign_kit": _sanitize_heavy_media(kit),
                     "updated_at": datetime.utcnow().isoformat(),
-                }
-                vc_coll.replace_one({"_id": doc_id}, vc_doc, upsert=True)
+                }}, upsert=True)
         except Exception as m_err:
             logger.debug(f"[MongoDB] Toggle autonomous delivery validation_campaigns note: {m_err}")
 
@@ -3309,7 +3437,14 @@ def record_survey_response_universal(
     vc_doc = vc_coll.find_one({"$or": [{"_id": pid}, {"project_id": pid}]}) if vc_coll is not None else None
 
     campaign_kit = dict(doc.get("campaignKit") or doc.get("campaign_kit") or (vc_doc.get("campaign_kit") if vc_doc else None) or {})
-    res_survey = dict((vc_doc.get("research_survey") if vc_doc else None) or campaign_kit.get("research_survey") or (doc.get("metadataInfo") or {}).get("research_survey") or {})
+    survey_sources = [s for s in [
+        doc.get("surveyData"),
+        (doc.get("validationCampaign") or {}).get("researchSurvey"),
+        campaign_kit.get("research_survey"),
+        (vc_doc.get("research_survey") if vc_doc else None),
+        (doc.get("metadataInfo") or {}).get("research_survey"),
+    ] if isinstance(s, dict)]
+    res_survey = dict(next((s for s in survey_sources if s.get("questions")), None) or (survey_sources[0] if survey_sources else {}))
 
     res_id = f"sr_{int(datetime.utcnow().timestamp()*1000)}"
     timestamp_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
@@ -3339,22 +3474,14 @@ def record_survey_response_universal(
         "date": datetime.utcnow().strftime("%Y-%m-%d")
     }
 
-    cur_responses = list(res_survey.get("responses") or [])
-    cur_responses.insert(0, response_item)
+    # Durable store first: one document per response
+    sr_coll = get_collection("survey_responses")
+    if sr_coll is not None:
+        sr_coll.replace_one({"_id": res_id}, {**response_item, "_id": res_id, "project_id": pid}, upsert=True)
+    cur_responses = _sync_survey_responses(doc) or [response_item]
     res_survey["responses"] = cur_responses
 
-    # Support pledge totals (recomputed from all responses)
-    stats = {"yes": 0, "maybe": 0, "no": 0, "waitlist": 0, "deposit": 0, "founding": 0, "consented": 0, "pricePoints": {}}
-    for r in cur_responses:
-        sp = r.get("support") or {}
-        if sp.get("decision") in ("yes", "maybe", "no"):
-            stats[sp["decision"]] += 1
-        if sp.get("level") in ("waitlist", "deposit", "founding"):
-            stats[sp["level"]] += 1
-        if sp.get("consent"):
-            stats["consented"] += 1
-        if sp.get("pricePoint"):
-            stats["pricePoints"][sp["pricePoint"]] = stats["pricePoints"].get(sp["pricePoint"], 0) + 1
+    stats = _survey_support_stats(cur_responses)
     res_survey["supportStats"] = stats
 
     # Update question response counts
@@ -3397,14 +3524,11 @@ def record_survey_response_universal(
         coll.replace_one({"_id": doc.get("_id", pid)}, doc, upsert=True)
 
     if vc_coll is not None:
-        vc_payload = {
-            "_id": pid,
+        vc_coll.update_one({"_id": pid}, {"$set": {
             "project_id": pid,
             "research_survey": res_survey,
-            "campaign_kit": campaign_kit,
-            "updated_at": datetime.utcnow().isoformat()
-        }
-        vc_coll.replace_one({"_id": pid}, vc_payload, upsert=True)
+            "updated_at": datetime.utcnow().isoformat(),
+        }}, upsert=True)
 
     # Respondents are anonymous: only operators get the full project back. Everyone else gets
     # the public page data (never other respondents' names/emails, revenue or notes).
@@ -3445,8 +3569,11 @@ def delete_survey_response(
     campaign_kit = dict(doc.get("campaignKit") or doc.get("campaign_kit") or (vc_doc.get("campaign_kit") if vc_doc else None) or {})
     res_survey = dict((vc_doc.get("research_survey") if vc_doc else None) or campaign_kit.get("research_survey") or (doc.get("metadataInfo") or {}).get("research_survey") or {})
 
-    cur_responses = list(res_survey.get("responses") or [])
-    new_responses = [r for r in cur_responses if r.get("id") != response_id]
+    sr_coll = get_collection("survey_responses")
+    _sync_survey_responses(doc)  # migrate embedded copies first so the tombstone sticks
+    if sr_coll is not None:
+        sr_coll.update_one({"_id": response_id}, {"$set": {"deleted": True, "project_id": pid}}, upsert=True)
+    new_responses = _sync_survey_responses(doc)
     res_survey["responses"] = new_responses
 
     cur_questions = list(res_survey.get("questions") or [])
@@ -3480,13 +3607,11 @@ def delete_survey_response(
         coll.replace_one({"_id": doc.get("_id", pid)}, doc, upsert=True)
 
     if vc_coll is not None:
-        vc_coll.replace_one({"_id": pid}, {
-            "_id": pid,
+        vc_coll.update_one({"_id": pid}, {"$set": {
             "project_id": pid,
             "research_survey": res_survey,
-            "campaign_kit": campaign_kit,
-            "updated_at": datetime.utcnow().isoformat()
-        }, upsert=True)
+            "updated_at": datetime.utcnow().isoformat(),
+        }}, upsert=True)
 
     return _normalize_mongo_project_dict(doc)
 
@@ -3511,6 +3636,11 @@ def clear_all_survey_responses(
     campaign_kit = dict(doc.get("campaignKit") or doc.get("campaign_kit") or (vc_doc.get("campaign_kit") if vc_doc else None) or {})
     res_survey = dict((vc_doc.get("research_survey") if vc_doc else None) or campaign_kit.get("research_survey") or (doc.get("metadataInfo") or {}).get("research_survey") or {})
 
+    sr_coll = get_collection("survey_responses")
+    _sync_survey_responses(doc)
+    if sr_coll is not None:
+        sr_coll.update_many({"project_id": pid}, {"$set": {"deleted": True}})
+    _sync_survey_responses(doc)
     res_survey["responses"] = []
     res_survey["analysis"] = None
 
@@ -3538,13 +3668,11 @@ def clear_all_survey_responses(
         coll.replace_one({"_id": doc.get("_id", pid)}, doc, upsert=True)
 
     if vc_coll is not None:
-        vc_coll.replace_one({"_id": pid}, {
-            "_id": pid,
+        vc_coll.update_one({"_id": pid}, {"$set": {
             "project_id": pid,
             "research_survey": res_survey,
-            "campaign_kit": campaign_kit,
-            "updated_at": datetime.utcnow().isoformat()
-        }, upsert=True)
+            "updated_at": datetime.utcnow().isoformat(),
+        }}, upsert=True)
 
     return _normalize_mongo_project_dict(doc)
 
