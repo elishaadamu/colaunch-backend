@@ -441,6 +441,7 @@ def _build_concept_card_image_url(
     accent_hex: str,
     features: List[str],
     index: int = 0,
+    creator_name: str = "",
 ) -> str:
     """Build deterministic backend concept preview PNG URL with real features & branding."""
     from urllib.parse import urlencode
@@ -461,11 +462,23 @@ def _build_concept_card_image_url(
     else:
         public_backend = backend_base
 
+    problem_text = str(concept.get("problem") or concept.get("description") or "")[:220]
+
     def _with_variant(u: str) -> str:
-        if "/api/outreach/concept-card-image" in u and "variant=" not in u:
-            sep = "&" if "?" in u else "?"
-            return f"{u}{sep}variant={index}"
-        return u
+        # Older stored image URLs predate the landing-hero design: add the missing fields.
+        if "/api/outreach/concept-card-image" not in u:
+            return u
+        extra = {}
+        if "variant=" not in u:
+            extra["variant"] = str(index)
+        if "problem=" not in u and problem_text:
+            extra["problem"] = problem_text
+        if "creator=" not in u and creator_name:
+            extra["creator"] = creator_name
+        if not extra:
+            return u
+        sep = "&" if "?" in u else "?"
+        return f"{u}{sep}{urlencode(extra)}"
 
     if isinstance(raw_img, str) and raw_img.strip():
         clean = raw_img.strip()
@@ -492,6 +505,8 @@ def _build_concept_card_image_url(
         "brand_color": accent_hex,
         "mockup_type": str(concept.get("mockupType") or "saas_os"),
         "variant": str(index),
+        "problem": problem_text,
+        "creator": creator_name or "",
     }
     return f"{public_backend}/api/outreach/concept-card-image?{urlencode(params)}"
 
@@ -535,7 +550,7 @@ def _render_single_concept_block(
     raw_features = concept.get("keyFeatures") or concept.get("features") or concept.get("coreFeatures") or []
     key_features = [str(f).strip() for f in raw_features if str(f).strip()][:4] if isinstance(raw_features, list) else []
 
-    concept_img = _build_concept_card_image_url(concept, accent_hex, key_features, index=index)
+    concept_img = _build_concept_card_image_url(concept, accent_hex, key_features, index=index, creator_name=creator_name)
     landing_url = _build_concept_landing_url(concept, creator_name=creator_name, index=index)
 
     contact_email = get_contact_reply_email()

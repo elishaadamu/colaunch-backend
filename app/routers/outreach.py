@@ -36,10 +36,12 @@ def render_dynamic_concept_card(
     tagline: Optional[str] = None,
     features: Optional[str] = None,
     variant: Optional[int] = None,
+    problem: Optional[str] = None,
+    creator: Optional[str] = None,
 ):
     """
-    Renders dynamic concept text into an authentic dark-mode concept card PNG
-    matching the ConceptLandingPage design and the creator's chosen brand color.
+    Renders the concept's landing-page hero (same design as <ConceptLandingPage>
+    on the website) as a PNG for outreach emails.
     """
     feature_list = [f.strip() for f in (features or "").split("|") if f.strip()]
     concept_data = {
@@ -55,6 +57,8 @@ def render_dynamic_concept_card(
         "brandColor": brand_color,
         "mockupType": mockup_type,
         "variant": variant,
+        "problem": (problem or "")[:220],
+        "creatorName": (creator or "")[:60],
     }
     png_bytes = generate_concept_card_image(concept_data)
     return Response(

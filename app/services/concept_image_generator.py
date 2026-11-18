@@ -82,14 +82,25 @@ def _get_font(size: int, is_bold: bool = False, is_mono: bool = False) -> ImageF
     for path in font_candidates:
         if os.path.exists(path):
             try:
-                return ImageFont.truetype(path, size)
+                font = ImageFont.truetype(path, size)
             except Exception:
                 continue
+            # Variable fonts (e.g. macOS SFNS) default to Regular; select the right weight.
+            try:
+                names = [n.decode() if isinstance(n, bytes) else n for n in font.get_variation_names()]
+                want = "Bold" if is_bold else "Regular"
+                if want in names:
+                    font.set_variation_by_name(want)
+                elif is_bold and "Semibold" in names:
+                    font.set_variation_by_name("Semibold")
+            except Exception:
+                pass
+            return font
 
     return ImageFont.load_default()
 
 
-def generate_concept_card_image(
+def _legacy_spec_card_image(
     concept: Dict[str, Any],
     width: int = 800,
     height: int = 490,
@@ -509,3 +520,304 @@ def generate_concept_card_image(
     output_buf = io.BytesIO()
     img.save(output_buf, format="PNG", optimize=True)
     return output_buf.getvalue()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Landing-page hero renderer (what the email shows now)
+#
+# Mirrors the hero of <ConceptLandingPage> on the website so the image in the
+# outreach email is the same design the creator sees when they click through:
+# nav bar → archetype pill → headline (tagline) → problem → CTA + pricing →
+# "Made with {creator}" on the left, and the archetype product mockup on the right.
+# Palette follows deriveBrandPalette() in ConceptLandingPage.jsx.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_ARCHETYPE_LABELS = [
+    "Workflow Operating System",
+    "AI Intelligence Copilot",
+    "Member Vault & Private Cohort",
+]
+
+
+def _parse_accent(raw_color) -> tuple:
+    accent = (200, 30, 60)
+    if raw_color and isinstance(raw_color, str):
+        c = raw_color.strip().lstrip("#")
+        if len(c) == 3:
+            c = "".join(ch * 2 for ch in c)
+        if len(c) == 6:
+            try:
+                rgb = (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16))
+                # Near-black brand colours would vanish on the dark page; fall back to crimson.
+                if _relative_luminance(rgb) > 0.02:
+                    accent = rgb
+            except ValueError:
+                pass
+    return accent
+
+
+def _landing_palette(accent):
+    page = (8, 9, 12)
+    surface = (16, 19, 26)
+    raised = (23, 27, 36)
+    muted_bg = _mix_rgb(accent, page, 0.07)
+    soft_bg = _mix_rgb(accent, surface, 0.13)
+    tint = accent
+    for i in range(21):
+        cand = _mix_rgb((255, 255, 255), accent, i / 20.0)
+        if (_contrast_ratio(cand, soft_bg) >= 5.5 and _contrast_ratio(cand, raised) >= 5.5
+                and _contrast_ratio(cand, muted_bg) >= 5.5):
+            tint = cand
+            break
+    return {
+        "solid": accent,
+        "on_solid": _on_accent_ink(accent),
+        "tint": tint,
+        "border": _mix_rgb(accent, surface, 0.34),
+        "page": page,
+        "surface": surface,
+        "raised": raised,
+        "muted_bg": muted_bg,
+        "soft_bg": soft_bg,
+        "line": (38, 41, 50),
+        "text": (243, 244, 246),
+        "body": (211, 215, 224),
+        "muted": (174, 181, 194),
+    }
+
+
+def _wrap(draw, text: str, font, max_w: float, max_lines: int):
+    words = (text or "").split()
+    lines, cur = [], ""
+    for w in words:
+        trial = f"{cur} {w}".strip()
+        if draw.textlength(trial, font=font) <= max_w:
+            cur = trial
+            continue
+        if cur:
+            lines.append(cur)
+        cur = w
+        if len(lines) == max_lines:
+            break
+    if cur and len(lines) < max_lines:
+        lines.append(cur)
+    if len(lines) == max_lines and len(" ".join(lines)) < len(" ".join(words)):
+        last = lines[-1]
+        while last and draw.textlength(last + "…", font=font) > max_w:
+            last = last[:-1]
+        lines[-1] = last.rstrip(" ,.;:") + "…"
+    return lines
+
+
+def _fit(draw, text: str, font, max_w: float) -> str:
+    text = (text or "").strip()
+    if draw.textlength(text, font=font) <= max_w:
+        return text
+    while text and draw.textlength(text + "…", font=font) > max_w:
+        text = text[:-1]
+    return text.rstrip() + "…"
+
+
+def _feature_titles(raw) -> list:
+    out = []
+    for f in raw or []:
+        t = f if isinstance(f, str) else (f.get("title") or f.get("name") or "") if isinstance(f, dict) else str(f)
+        t = str(t).split(":")[0].strip()
+        if t:
+            out.append(t)
+    return out[:4]
+
+
+def generate_concept_card_image(
+    concept: Dict[str, Any],
+    width: int = 800,
+    height: int = 396,
+    scale: int = 2,
+) -> bytes:
+    s = scale
+    W, H = width * s, height * s
+    accent = _parse_accent(concept.get("brandColor") or concept.get("brand_color") or concept.get("accentColor"))
+    P = _landing_palette(accent)
+
+    # Layout variant: same rule as the website (concept index 0/1/2, else mockup type)
+    raw_variant = concept.get("variant")
+    variant = 0
+    if raw_variant is not None and str(raw_variant).strip() != "":
+        try:
+            variant = int(raw_variant) % 3
+        except (TypeError, ValueError):
+            variant = 0
+    else:
+        mt = str(concept.get("mockupType") or "").lower()
+        variant = 1 if mt == "ai_copilot" else 2 if mt == "knowledge_hub" else 0
+
+    name = str(concept.get("name") or "New product").strip()
+    tagline = str(concept.get("tagline") or "").strip() or name
+    problem = str(concept.get("problem") or concept.get("description") or "").strip()
+    pricing = str(concept.get("pricing") or "").replace("•", "·").strip()
+    creator = str(concept.get("creatorName") or concept.get("creator") or "").strip()
+    features = _feature_titles(concept.get("features") or concept.get("keyFeatures"))
+    while len(features) < 4:
+        features.append(["Daily setup", "Focus sessions", "Progress tracking", "Weekly review"][len(features)])
+
+    img = Image.new("RGB", (W, H), P["page"])
+    d = ImageDraw.Draw(img)
+
+    f_logo = _get_font(13 * s, is_bold=True)
+    f_nav = _get_font(13 * s, is_bold=True)
+    f_btn_sm = _get_font(11 * s, is_bold=True)
+    f_pill = _get_font(10 * s, is_bold=True)
+    f_h1 = _get_font(29 * s, is_bold=True)
+    f_body = _get_font(13 * s)
+    f_btn = _get_font(12 * s, is_bold=True)
+    f_price = _get_font(12 * s)
+    f_small = _get_font(11 * s)
+    f_card_title = _get_font(11 * s, is_bold=True)
+    f_card = _get_font(9 * s, is_bold=True)
+    f_caption = _get_font(9 * s)
+
+    # Hero band: soft crimson-tinted gradient (top → page)
+    for y in range(H):
+        t = y / H
+        d.line([(0, y), (W, y)], fill=_mix_rgb(P["muted_bg"], P["page"], 1 - t * 0.55))
+
+    # ── Nav ───────────────────────────────────────────────────────────────────
+    nav_h = 52 * s
+    pad_x = 36 * s
+    d.line([(0, nav_h), (W, nav_h)], fill=P["line"], width=s)
+    logo = 26 * s
+    ly = (nav_h - logo) // 2
+    d.rounded_rectangle([pad_x, ly, pad_x + logo, ly + logo], radius=6 * s, fill=P["solid"])
+    initial = (name[:1] or "C").upper()
+    iw = d.textlength(initial, font=f_logo)
+    d.text((pad_x + (logo - iw) / 2, ly + 5 * s), initial, fill=P["on_solid"], font=f_logo)
+    d.text((pad_x + logo + 10 * s, ly + 5 * s), _fit(d, name, f_nav, 300 * s), fill=P["text"], font=f_nav)
+
+    cta_sm = "Get early access"
+    cta_w = d.textlength(cta_sm, font=f_btn_sm) + 24 * s
+    bx2 = W - pad_x
+    bx1 = bx2 - cta_w
+    d.rectangle([bx1, ly, bx2, ly + logo], fill=P["solid"])
+    d.text((bx1 + 12 * s, ly + 7 * s), cta_sm, fill=P["on_solid"], font=f_btn_sm)
+    li_w = d.textlength("Log in", font=f_btn_sm) + 22 * s
+    d.rectangle([bx1 - 8 * s - li_w, ly, bx1 - 8 * s, ly + logo], outline=P["line"], width=s, fill=P["page"])
+    d.text((bx1 - 8 * s - li_w + 11 * s, ly + 7 * s), "Log in", fill=P["body"], font=f_btn_sm)
+
+    # ── Left column ───────────────────────────────────────────────────────────
+    left_w = 380 * s
+    y = nav_h + 34 * s
+    pill_label = _ARCHETYPE_LABELS[variant]
+    pw = d.textlength(pill_label, font=f_pill) + 34 * s
+    d.rounded_rectangle([pad_x, y, pad_x + pw, y + 22 * s], radius=11 * s, fill=P["soft_bg"], outline=P["border"], width=s)
+    d.ellipse([pad_x + 10 * s, y + 8 * s, pad_x + 16 * s, y + 14 * s], fill=P["solid"])
+    d.text((pad_x + 22 * s, y + 5 * s), pill_label, fill=P["tint"], font=f_pill)
+    y += 36 * s
+
+    for line in _wrap(d, tagline, f_h1, left_w, 3):
+        d.text((pad_x, y), line, fill=P["text"], font=f_h1)
+        y += 36 * s
+    y += 6 * s
+    if problem:
+        for line in _wrap(d, problem, f_body, left_w - 10 * s, 3):
+            d.text((pad_x, y), line, fill=P["body"], font=f_body)
+            y += 20 * s
+    y += 16 * s
+
+    cta = "Get early access"
+    cw = d.textlength(cta, font=f_btn) + 36 * s
+    d.rectangle([pad_x, y, pad_x + cw, y + 38 * s], fill=P["solid"])
+    d.text((pad_x + 18 * s, y + 12 * s), cta, fill=P["on_solid"], font=f_btn)
+    if pricing:
+        d.text((pad_x + cw + 14 * s, y + 12 * s), _fit(d, pricing, f_price, left_w - cw - 14 * s), fill=P["body"], font=f_price)
+    y += 38 * s + 22 * s
+    if creator and y + 24 * s < H - 16 * s:
+        r = 11 * s
+        d.ellipse([pad_x, y, pad_x + 2 * r, y + 2 * r], fill=P["raised"], outline=P["border"], width=s)
+        ci = (creator[:1] or "C").upper()
+        d.text((pad_x + r - d.textlength(ci, font=f_card) / 2, y + 6 * s), ci, fill=P["tint"], font=f_card)
+        d.text((pad_x + 2 * r + 9 * s, y + 4 * s), _fit(d, f"Made with {creator}", f_small, left_w - 40 * s), fill=P["muted"], font=f_small)
+
+    # ── Right column: product mockup (same archetype as the website) ────────
+    mx1, my1 = 446 * s, nav_h + 30 * s
+    mx2, my2 = W - pad_x, my1 + 270 * s
+    d.rounded_rectangle([mx1, my1, mx2, my2], radius=12 * s, fill=P["surface"], outline=P["border"], width=s)
+    ix1, iy1, ix2, iy2 = mx1 + 10 * s, my1 + 10 * s, mx2 - 10 * s, my2 - 10 * s
+    d.rounded_rectangle([ix1, iy1, ix2, iy2], radius=8 * s, fill=(12, 14, 19), outline=P["line"], width=s)
+    d.ellipse([ix1 + 12 * s, iy1 + 13 * s, ix1 + 20 * s, iy1 + 21 * s], fill=P["solid"])
+    d.text((ix1 + 28 * s, iy1 + 10 * s), _fit(d, name, f_card_title, 170 * s), fill=P["text"], font=f_card_title)
+    d.rounded_rectangle([ix2 - 76 * s, iy1 + 9 * s, ix2 - 12 * s, iy1 + 25 * s], radius=8 * s, outline=P["border"], width=s, fill=P["soft_bg"])
+    d.line([(ix2 - 62 * s, iy1 + 17 * s), (ix2 - 22 * s, iy1 + 17 * s)], fill=P["solid"], width=2 * s)
+    body_top = iy1 + 36 * s
+    inner_w = ix2 - ix1 - 24 * s
+    bar = (44, 48, 60)
+
+    if variant == 0:
+        # Workflow board: 5 columns, middle one highlighted, connector dots
+        cols = 5
+        gap = 7 * s
+        col_w = (inner_w - gap * (cols - 1)) / cols
+        col_h = 124 * s
+        for i in range(cols):
+            cx1 = ix1 + 12 * s + i * (col_w + gap)
+            hot = i == 2
+            d.rounded_rectangle([cx1, body_top, cx1 + col_w, body_top + col_h], radius=6 * s,
+                                fill=P["soft_bg"] if hot else (20, 23, 31), outline=P["solid"] if hot else P["line"], width=s)
+            d.line([(cx1 + 8 * s, body_top + 10 * s), (cx1 + col_w * 0.55, body_top + 10 * s)], fill=P["solid"] if hot else bar, width=3 * s)
+            for k in range(3):
+                ky = body_top + 22 * s + k * 30 * s
+                if ky + 22 * s > body_top + col_h - 4 * s:
+                    break
+                card_fill = P["solid"] if (hot and k == 0) else _mix_rgb(P["solid"], (20, 23, 31), 0.35) if k == 0 else (32, 36, 46)
+                d.rounded_rectangle([cx1 + 6 * s, ky, cx1 + col_w - 6 * s, ky + 22 * s], radius=4 * s, fill=card_fill)
+            if i < cols - 1:
+                dy = body_top + 33 * s
+                d.ellipse([cx1 + col_w - 3 * s, dy - 3 * s, cx1 + col_w + 3 * s, dy + 3 * s], fill=P["solid"])
+        chips_y = body_top + col_h + 12 * s
+        chip_w = (inner_w - 10 * s) / 2
+        for i, ft in enumerate(features[1:3]):
+            x = ix1 + 12 * s + i * (chip_w + 10 * s)
+            d.rounded_rectangle([x, chips_y, x + chip_w, chips_y + 40 * s], radius=6 * s,
+                                fill=(20, 23, 31), outline=P["border"] if i == 0 else P["line"], width=s)
+            d.rounded_rectangle([x + 10 * s, chips_y + 13 * s, x + 24 * s, chips_y + 27 * s], radius=3 * s, fill=P["soft_bg"])
+            d.ellipse([x + 14 * s, chips_y + 17 * s, x + 20 * s, chips_y + 23 * s], fill=P["solid"])
+            d.text((x + 32 * s, chips_y + 14 * s), _fit(d, ft, f_card, chip_w - 40 * s), fill=P["body"], font=f_card)
+    elif variant == 1:
+        # Copilot: command bar with the tagline + Generate, then generated output rows
+        d.rounded_rectangle([ix1 + 12 * s, body_top, ix2 - 12 * s, body_top + 34 * s], radius=6 * s, fill=(20, 23, 31), outline=P["border"], width=s)
+        d.text((ix1 + 22 * s, body_top + 11 * s), _fit(d, tagline, f_card, inner_w - 90 * s), fill=P["body"], font=f_card)
+        gw = 64 * s
+        d.rounded_rectangle([ix2 - 18 * s - gw, body_top + 6 * s, ix2 - 18 * s, body_top + 28 * s], radius=4 * s, fill=P["solid"])
+        d.text((ix2 - 18 * s - gw + 10 * s, body_top + 11 * s), "Generate", fill=P["on_solid"], font=f_card)
+        ry = body_top + 46 * s
+        for i, ft in enumerate(features[:3]):
+            d.rounded_rectangle([ix1 + 12 * s, ry, ix2 - 12 * s, ry + 38 * s], radius=6 * s,
+                                fill=P["soft_bg"] if i == 0 else (20, 23, 31), outline=P["border"] if i == 0 else P["line"], width=s)
+            d.text((ix1 + 22 * s, ry + 7 * s), _fit(d, ft, f_card, inner_w - 30 * s), fill=P["text"] if i == 0 else P["body"], font=f_card)
+            d.line([(ix1 + 22 * s, ry + 26 * s), (ix1 + 22 * s + inner_w * (0.7 - i * 0.12), ry + 26 * s)], fill=bar, width=3 * s)
+            ry += 46 * s
+            if ry + 38 * s > iy2 - 8 * s:
+                break
+    else:
+        # Member vault: 2×2 module tiles with lock badges
+        gap = 8 * s
+        tile_w = (inner_w - gap) / 2
+        tile_h = ((iy2 - 12 * s) - body_top - gap) / 2  # fills the fixed-height frame
+        for i, ft in enumerate(features[:4]):
+            tx = ix1 + 12 * s + (i % 2) * (tile_w + gap)
+            ty = body_top + (i // 2) * (tile_h + gap)
+            hot = i == 0
+            d.rounded_rectangle([tx, ty, tx + tile_w, ty + tile_h], radius=6 * s,
+                                fill=P["soft_bg"] if hot else (20, 23, 31), outline=P["border"] if hot else P["line"], width=s)
+            d.rounded_rectangle([tx + 10 * s, ty + 10 * s, tx + 28 * s, ty + 28 * s], radius=4 * s, fill=P["solid"] if hot else (32, 36, 46))
+            d.text((tx + 10 * s, ty + 36 * s), _fit(d, ft, f_card, tile_w - 20 * s), fill=P["text"] if hot else P["body"], font=f_card)
+            d.line([(tx + 10 * s, ty + 54 * s), (tx + tile_w * 0.6, ty + 54 * s)], fill=bar, width=3 * s)
+
+    cap = "Sample data, for illustration"
+    d.text(((mx1 + mx2) / 2 - d.textlength(cap, font=f_caption) / 2, my2 + 10 * s), cap, fill=P["muted"], font=f_caption)
+
+    # Subtle bottom hairline in brand colour
+    d.line([(0, H - s), (W, H - s)], fill=P["border"], width=s)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
