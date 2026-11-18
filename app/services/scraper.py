@@ -870,6 +870,87 @@ def scrape_youtube(handle: str, deep: bool = False) -> dict:
     return result
 
 
+_APIFY_VIDEO_CACHE: dict = {}
+_APIFY_VIDEO_TTL_SECS = 6 * 3600
+
+
+def _fmt_views(raw) -> str:
+    try:
+        iv = int(str(raw).replace(",", "").split(".")[0] or 0)
+    except (TypeError, ValueError):
+        return str(raw or "")
+    if iv < 1000:
+        return f"{iv:,} views"
+    if iv < 1_000_000:
+        return f"{iv/1000:.1f}K views"
+    return f"{iv/1_000_000:.1f}M views"
+
+
+def apify_fetch_channel_videos(handle: str, limit: int = 8, apify_token: str = None) -> list:
+    """
+    The creator's own latest uploads via Apify (streamers/youtube-channel-scraper).
+    Only items whose channel matches the requested handle are kept, so a different
+    channel's videos can never be shown for this creator. Cached for 6 hours.
+    """
+    import time
+    from app.config import settings
+    clean_h = str(handle or "").strip().lstrip("@").split("/")[0].split("?")[0]
+    token = apify_token or getattr(settings, "APIFY_API_KEY", "")
+    if not clean_h or not token:
+        return []
+
+    key = clean_h.lower()
+    cached = _APIFY_VIDEO_CACHE.get(key)
+    if cached and time.time() - cached[0] < _APIFY_VIDEO_TTL_SECS:
+        return cached[1][:limit]
+
+    actor_id = getattr(settings, "APIFY_YOUTUBE_ACTOR", "67Q6fmd8iedTVcCwY")
+    run_input = {
+        "startUrls": [{"url": f"https://www.youtube.com/@{clean_h}"}],
+        "maxResults": max(limit, 6),
+        "maxResultsShorts": 0,
+        "maxResultStreams": 0,
+        "sortVideosBy": "NEWEST",
+    }
+    try:
+        items = _apify_run(actor_id, run_input, token, timeout_secs=90) or []
+    except Exception as e:
+        logger.warning(f"[Apify Videos] run failed for @{clean_h}: {e}")
+        return []
+
+    def _belongs(item: dict) -> bool:
+        user = str(item.get("channelUsername") or "").lstrip("@").lower()
+        ch_url = str(item.get("channelUrl") or "").lower()
+        inp = str(item.get("inputChannelUrl") or item.get("input") or "").lower()
+        return user == key or f"/@{key}" in ch_url or f"/@{key}" in inp
+
+    videos = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("title") or not _belongs(item):
+            continue
+        vid_id = item.get("id") or ""
+        url = item.get("url") or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else "")
+        videos.append({
+            "id": vid_id,
+            "videoId": vid_id,
+            "title": item.get("title"),
+            "url": url,
+            "views": _fmt_views(item.get("viewCount") or 0),
+            "likes": item.get("likes") or 0,
+            "comments": item.get("commentsCount") or 0,
+            "description": (item.get("text") or "")[:400],
+            "thumbnail": item.get("thumbnailUrl") or (f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg" if vid_id else ""),
+            "publishedAt": item.get("date") or "",
+            "source": "apify",
+        })
+        if len(videos) >= limit:
+            break
+
+    if videos:
+        _APIFY_VIDEO_CACHE[key] = (time.time(), videos)
+    return videos
+
+
 def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> list[dict]:
     """
     Fetch the real uploaded videos for a YouTube channel using RSS feed with Innertube Browse fallback.
@@ -896,6 +977,12 @@ def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> 
     
     clean_h = clean.lstrip("@").strip()
     channel_id = clean_h if clean_h.startswith("UC") and len(clean_h) == 24 else None
+
+    # Primary: Apify channel scraper (the creator's own uploads, exact channel match).
+    if not channel_id and "@" not in clean_h and "." not in clean_h:  # handles only (never emails/domains)
+        apify_videos = apify_fetch_channel_videos(clean_h, limit=limit)
+        if apify_videos:
+            return apify_videos
 
     # Step 1: If channel_id is not already known, resolve it via resolve_url or channel page
     if not channel_id:
@@ -926,14 +1013,12 @@ def fetch_youtube_channel_videos(handle_or_channel_id: str, limit: int = 10) -> 
         except Exception as e:
             logger.debug(f"[YouTube Video Fetch] Page check error for {clean_h}: {e}")
 
-    # Fallback to innertube search to resolve channel_id
+    # NOTE: no search-based fallback. Resolving a handle by YouTube *search* returned
+    # unrelated channels (e.g. a small test channel) whose uploads were shown as the
+    # creator's. If the exact channel can't be resolved, return no videos instead.
     if not channel_id:
-        try:
-            info = innertube_fetch_channel(clean_h, deep=False)
-            if info and info.get("channel_id"):
-                channel_id = info["channel_id"]
-        except Exception as e:
-            logger.debug(f"[YouTube Video Fetch] Innertube search error for {clean_h}: {e}")
+        logger.info(f"[YouTube Video Fetch] Could not resolve exact channel for @{clean_h}; returning no videos.")
+        return []
 
     videos = []
 
