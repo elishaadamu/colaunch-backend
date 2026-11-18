@@ -30,6 +30,31 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
+def _public_survey_questions(doc: dict) -> list:
+    """Survey questions (text only) for the public /survey page."""
+    kit = doc.get("campaignKit") or doc.get("campaign_kit") or {}
+    meta = doc.get("metadataInfo") or doc.get("metadata_info") or {}
+    sources = [
+        (kit.get("research_survey") or {}).get("questions"),
+        (doc.get("surveyData") or {}).get("questions"),
+        (meta.get("research_survey") or {}).get("questions"),
+    ]
+    questions = next((q for q in sources if isinstance(q, list) and q), None)
+    if not questions:
+        try:
+            from app.mongodb import get_collection
+            vc = get_collection("validation_campaigns")
+            pid = str(doc.get("_id") or doc.get("id") or "")
+            vdoc = vc.find_one({"$or": [{"_id": pid}, {"project_id": pid}]}) if vc is not None and pid else None
+            questions = ((vdoc or {}).get("research_survey") or {}).get("questions") or []
+        except Exception:
+            questions = []
+    return [
+        {"id": q.get("id"), "category": q.get("category"), "question": q.get("question")}
+        for q in questions if isinstance(q, dict) and q.get("question")
+    ][:8]
+
+
 def _filter_public_project_dict(doc: dict) -> dict:
     """Return public-safe projection of a project document (no emails, no revenue, no operator notes)."""
     p_id = str(doc.get("id") or doc.get("_id") or "")
@@ -69,6 +94,7 @@ def _filter_public_project_dict(doc: dict) -> dict:
         ][:3],
         "mockupImage": doc.get("mockupImage") or doc.get("mockup_image")
             or (doc.get("metadataInfo") or {}).get("mockup_image") or (doc.get("meta") or {}).get("mockup_image"),
+        "surveyQuestions": _public_survey_questions(doc),
         "campaignKit": {
             "pricingConfig": (doc.get("campaignKit") or {}).get("pricingConfig")
                 or ((doc.get("validationCampaign") or {}).get("productAssets") or {}).get("pricingConfig"),
@@ -562,6 +588,9 @@ class RecordSurveyResponseRequest(BaseModel):
     intentScore: Optional[int] = None
     answers: Optional[Dict[str, Any]] = None
     submittedAt: Optional[str] = None
+    # Support pledge: {"decision": yes|maybe|no, "level": waitlist|deposit|founding,
+    #                  "pricePoint": "...", "consent": bool}
+    support: Optional[Dict[str, Any]] = None
 
 
 
@@ -3241,6 +3270,7 @@ async def stripe_webhook(request: Request):
 @router.post("/{project_id}/survey-response")
 def record_survey_response_universal(
     body: RecordSurveyResponseRequest,
+    request: Request,
     project_id: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
@@ -3288,12 +3318,23 @@ def record_survey_response_universal(
     res_email = (body.email or body.respondentEmail or "").strip() or f"respondent_{res_id[-4:]}@example.com"
     res_rating = int(body.rating if body.rating is not None else (body.intentScore if body.intentScore is not None else 8))
 
+    raw_support = body.support if isinstance(body.support, dict) else {}
+    decision = str(raw_support.get("decision") or "").lower()
+    level = str(raw_support.get("level") or "").lower()
+    support = {
+        "decision": decision if decision in ("yes", "maybe", "no") else None,
+        "level": level if (decision == "yes" and level in ("waitlist", "deposit", "founding")) else None,
+        "pricePoint": str(raw_support.get("pricePoint") or "")[:40] or None,
+        "consent": bool(raw_support.get("consent")),
+    }
+
     response_item = {
         "id": res_id,
         "name": res_name,
         "email": res_email,
         "rating": res_rating,
         "answers": body.answers or {},
+        "support": support,
         "submittedAt": body.submittedAt or timestamp_str,
         "date": datetime.utcnow().strftime("%Y-%m-%d")
     }
@@ -3301,6 +3342,20 @@ def record_survey_response_universal(
     cur_responses = list(res_survey.get("responses") or [])
     cur_responses.insert(0, response_item)
     res_survey["responses"] = cur_responses
+
+    # Support pledge totals (recomputed from all responses)
+    stats = {"yes": 0, "maybe": 0, "no": 0, "waitlist": 0, "deposit": 0, "founding": 0, "consented": 0, "pricePoints": {}}
+    for r in cur_responses:
+        sp = r.get("support") or {}
+        if sp.get("decision") in ("yes", "maybe", "no"):
+            stats[sp["decision"]] += 1
+        if sp.get("level") in ("waitlist", "deposit", "founding"):
+            stats[sp["level"]] += 1
+        if sp.get("consent"):
+            stats["consented"] += 1
+        if sp.get("pricePoint"):
+            stats["pricePoints"][sp["pricePoint"]] = stats["pricePoints"].get(sp["pricePoint"], 0) + 1
+    res_survey["supportStats"] = stats
 
     # Update question response counts
     cur_questions = list(res_survey.get("questions") or [])
@@ -3351,7 +3406,22 @@ def record_survey_response_universal(
         }
         vc_coll.replace_one({"_id": pid}, vc_payload, upsert=True)
 
-    return _normalize_mongo_project_dict(doc)
+    # Respondents are anonymous: only operators get the full project back. Everyone else gets
+    # the public page data (never other respondents' names/emails, revenue or notes).
+    from app.auth import get_current_auth, AuthRole
+    caller = get_current_auth(
+        request,
+        authorization=request.headers.get("authorization"),
+        x_operator_token=request.headers.get("x-operator-token"),
+        x_portal_token=None, token=None, portal_token=None,
+    )
+    if caller.role == AuthRole.OPERATOR:
+        return _normalize_mongo_project_dict(doc)
+    public = _filter_public_project_dict(doc)
+    public["surveyRecorded"] = True
+    public["responseId"] = res_id
+    public["supporterCount"] = stats["yes"]
+    return public
 
 
 @router.delete("/{project_id}/survey-response/{response_id}")
