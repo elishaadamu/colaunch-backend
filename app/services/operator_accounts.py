@@ -3,9 +3,7 @@
 Operator accounts (Acquisition OS / Project OS studio logins).
 
 Passwords are stored as salted PBKDF2-SHA256 hashes in MongoDB (`operator_accounts`).
-Creating an account requires either:
-  * the invite code in OPERATOR_INVITE_CODE (so a stranger can't self-register), or
-  * an already-authenticated operator making the request (operators invite teammates).
+Anyone can self-register (set OPERATOR_SIGNUP_DISABLED=true to close sign-up).
 """
 import hashlib
 import hmac
@@ -43,17 +41,6 @@ def _collection():
 
 def _hash_password(password: str, salt: bytes, iterations: int = PBKDF2_ITERATIONS) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations).hex()
-
-
-def invite_code_configured() -> bool:
-    return bool((os.getenv("OPERATOR_INVITE_CODE") or "").strip())
-
-
-def invite_code_valid(code: Optional[str]) -> bool:
-    expected = (os.getenv("OPERATOR_INVITE_CODE") or "").strip()
-    if not expected or not code:
-        return False
-    return hmac.compare_digest(code.strip().encode(), expected.encode())
 
 
 def validate_new_account(name: str, email: str, password: str) -> tuple[str, str]:

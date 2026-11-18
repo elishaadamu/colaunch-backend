@@ -194,7 +194,6 @@ class OperatorSignupRequest(BaseModel):
     name: str
     email: str
     password: str
-    invite_code: Optional[str] = None
 
 
 def _login_success(email: str, name: str):
@@ -230,50 +229,31 @@ def launch_login(payload: LaunchLoginRequest):
     raise HTTPException(status_code=401, detail="Invalid email or password.")
 
 
+def _signup_disabled() -> bool:
+    import os
+    return (os.getenv("OPERATOR_SIGNUP_DISABLED") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @router.get("/operator-signup/status")
 def operator_signup_status():
-    """Tell the login screen whether invite-code signup is enabled (never reveals the code)."""
-    from app.services.operator_accounts import invite_code_configured
-    return {"invite_signup_enabled": invite_code_configured()}
+    """Tell the login screen whether self-signup is open."""
+    return {"signup_enabled": not _signup_disabled()}
 
 
 @router.post("/operator-signup", status_code=201)
-def operator_signup(payload: OperatorSignupRequest, request: Request):
+def operator_signup(payload: OperatorSignupRequest):
     """
-    Create an operator account. Allowed when the request carries a valid
-    OPERATOR_INVITE_CODE, or comes from an already signed-in operator.
+    Open self-signup for operator accounts (name, email, password).
+    Set OPERATOR_SIGNUP_DISABLED=true in the environment to close it.
     """
-    from app.auth import get_current_auth, AuthRole
-    from app.services.operator_accounts import (
-        create_operator_account, invite_code_valid, invite_code_configured, SignupError,
-    )
+    from app.services.operator_accounts import create_operator_account, SignupError
 
-    caller = get_current_auth(
-        request,
-        authorization=request.headers.get("authorization"),
-        x_operator_token=request.headers.get("x-operator-token"),
-        x_portal_token=None,
-        token=None,
-        portal_token=None,
-    )
-    is_operator = caller.role == AuthRole.OPERATOR
-
-    if not is_operator:
-        if not invite_code_configured():
-            raise HTTPException(403, "Sign-up is closed. Ask an operator to invite you.")
-        if not invite_code_valid(payload.invite_code):
-            raise HTTPException(403, "That invite code isn't valid.")
+    if _signup_disabled():
+        raise HTTPException(403, "Sign-up is currently closed. Contact an administrator.")
 
     try:
-        account = create_operator_account(
-            payload.name, payload.email, payload.password,
-            created_by="operator" if is_operator else "invite_code",
-        )
+        account = create_operator_account(payload.name, payload.email, payload.password, created_by="self_signup")
     except SignupError as e:
         raise HTTPException(e.status_code, e.detail)
 
-    # Invite-code signups are signed in immediately; operator-created accounts are not
-    # (the inviting operator keeps their own session).
-    if is_operator:
-        return {"status": "created", "user": account}
     return _login_success(account["email"], account["name"])
