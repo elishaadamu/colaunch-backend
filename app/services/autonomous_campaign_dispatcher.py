@@ -384,54 +384,81 @@ def dispatch_campaign_post_email(
         or kit.get("videoUrl")
     )
 
-    # Format HTML
-    subject = f"[Day {day_num} Post Kit] {task_title} • {p_name}"
-    tz_label = kit.get("creatorTimezone") or auto_config.get("timezone") or "local timezone"
-    preorder_slug = (p_name or "launch").lower().replace(" ", "-")
-    preorder_link = f"https://creator-forge-frontend.vercel.app/preorder/{preorder_slug}?ref=post_kit"
+    # ── Build the post kit (new template, real attachments) ────────────────────────────────
+    from app.services import campaign_delivery as cd
+    doc_for_links = mongo_proj or {"productName": p_name}
+    kind = cd.channel_kind(selected_task)
+    link = f"{cd.public_base_url()}/preorder/{cd.project_slug(doc_for_links)}?ref={cd.ref_for(kind)}"
+    socials = {k: v for k, v in (kit.get("socialLinks") or {}).items() if isinstance(v, str) and v.startswith("http")}
+    if not socials.get("youtube") and mongo_proj:
+        ch_url = mongo_proj.get("channelUrl") or (mongo_proj.get("metadataInfo") or {}).get("channel_url")
+        if ch_url:
+            socials["youtube"] = ch_url
+    sel = (mongo_proj or {}).get("selectedConcept") or {}
+    accent = sel.get("landingBrandColor") or (mongo_proj or {}).get("brandColor") or "#c81e3c"
+    if kind != "video":
+        video_url = selected_task.get("videoUrl") if selected_task.get("videoUrl") else None
+    if kind == "video" and not video_url:
+        video_url = kit.get("videoUrl")
+    video_thumb = selected_task.get("thumbnailUrl") or kit.get("videoThumbnailUrl")
 
-    html_content = format_daily_post_kit_email_html(
+    attachments = []
+    attached = []
+    if image_url and kind in ("post", "story", "dm") :
+        att = cd.fetch_attachment(image_url, f"day-{day_num}-graphic.png", "image/png", cd.MAX_IMAGE_ATTACH_BYTES)
+        if att:
+            attachments.append(att)
+            attached.append("image")
+    if video_url:
+        att = cd.fetch_attachment(video_url, f"day-{day_num}-video.mp4", "video/mp4", cd.MAX_VIDEO_ATTACH_BYTES)
+        if att:
+            attachments.append(att)
+            attached.append("video")
+
+    upcoming = [t for t in schedule[task_idx + 1:] if not t.get("done")]
+    for i, t in enumerate(schedule):
+        t["day"] = i + 1
+    cfg = cd.get_delivery_config(str((mongo_proj or {}).get("_id") or (mongo_proj or {}).get("id") or project_id)) or {}
+    tz_label = cfg.get("timezone") or kit.get("creatorTimezone") or auto_config.get("timezone") or ""
+    send_label = cd.local_now(tz_label).strftime("%A %d %B") if tz_label else ""
+
+    subject = f"Day {day_num}: {task_title} · {p_name}"
+    html_content, plain_text = cd.build_post_kit_email(
         creator_name=c_name,
-        creator_handle=c_handle,
         product_name=p_name,
         product_tagline=p_tagline,
-        milestone_num=day_num,
+        task=selected_task,
         day_num=day_num,
-        channel=selected_task.get("channel", "Social Media"),
-        title=task_title,
-        description=task_desc,
-        caption_text=caption,
+        total_days=len(schedule),
+        caption=caption,
         image_url=image_url,
         video_url=video_url,
-        preorder_url=preorder_link,
-        recommended_time=f"12:00 AM (Midnight) · {tz_label}"
+        video_thumb_url=video_thumb,
+        link=link,
+        socials=socials,
+        upcoming=upcoming,
+        accent=accent,
+        send_label=send_label,
+        attached=attached,
     )
 
-    plain_text = f"""
-[CREATOR FORGE DAILY POST KIT • DAY {day_num}]
-Venture: {p_name}
-Milestone: {task_title}
-Channel: {selected_task.get('channel', 'Social Media')}
-
-CAPTION TO COPY:
-{caption}
-
-ASSETS:
-- Image: {image_url or 'None'}
-- Video: {video_url or 'None'}
-
-Pre-Order URL: {preorder_link}
-"""
-
-    # Dispatch email
     provider = EmailProvider()
     send_result = provider.send(
         to_email=target_email,
         subject=subject,
         body_html=html_content,
         body_text=plain_text,
-        from_name=f"{p_name} Launch Studio"
+        from_name=f"{p_name} · CoLaunch",
+        attachments=attachments or None,
     )
+
+    # Durable sent log (survives any later kit save from the page)
+    pid_for_log = str((mongo_proj or {}).get("_id") or (mongo_proj or {}).get("id") or project_id)
+    try:
+        cd.record_task_sent(pid_for_log, selected_task, target_email,
+                            auto=str(caller or "").startswith("autonomous"), tz_name=tz_label or "UTC")
+    except Exception as log_err:
+        logger.warning(f"[Post kit] Could not record send: {log_err}")
 
     # Mark task as emailed and enforce sequential day numbers on all tasks
     selected_task["emailed"] = True
@@ -454,7 +481,7 @@ Pre-Order URL: {preorder_link}
             auto_del = {}
         auto_del["recipientEmail"] = target_email
         if "enabled" not in auto_del:
-            auto_del["enabled"] = True
+            auto_del["enabled"] = False
             auto_del["intervalHours"] = 24
             auto_del["intervalSeconds"] = 86400
             auto_del["cadence"] = "24_hours"
@@ -480,14 +507,12 @@ Pre-Order URL: {preorder_link}
         vc_coll = get_collection("validation_campaigns")
         if vc_coll is not None:
             doc_id = str(p_doc.get("_id") or p_doc.get("id") or project_id)
-            vc_doc = {
-                "_id": doc_id,
+            vc_coll.update_one({"_id": doc_id}, {"$set": {
                 "project_id": doc_id,
                 "campaign_kit": _sanitize_heavy_media(kit),
                 "campaign_launched": True,
                 "updated_at": datetime.utcnow().isoformat(),
-            }
-            vc_coll.replace_one({"_id": doc_id}, vc_doc, upsert=True)
+            }}, upsert=True)
     except Exception as m_err:
         logger.debug(f"[MongoDB] Autonomous dispatch MongoDB update note: {m_err}")
 
@@ -862,27 +887,14 @@ async def start_campaign_schedule_loop(check_interval_seconds: int = 60):
 
     await asyncio.sleep(5)  # Let server complete initial startup and socket binding
 
+    from app.services.campaign_delivery import run_delivery_tick
     while _campaign_scheduler_running:
         try:
-            mongo_evaluated_ids = set()
-            # 1. Primary: Evaluate projects from MongoDB (active database)
-            try:
-                from app.mongodb import get_collection
-                coll = get_collection("co_launch_projects")
-                if coll is not None:
-                    docs = list(coll.find({}))
-                    for m_doc in docs:
-                        pid = str(m_doc.get("_id") or m_doc.get("id"))
-                        mongo_evaluated_ids.add(pid)
-                        try:
-                            _evaluate_mongo_project_autonomous_delivery(m_doc)
-                        except Exception as m_err:
-                            logger.debug(f"[Autonomous Scheduler] Mongo project {pid} eval notice: {m_err}")
-            except Exception as mongo_err:
-                logger.debug(f"[Autonomous Scheduler] Mongo loop notice: {mongo_err}")
+            sent = await asyncio.to_thread(run_delivery_tick)
+            if sent:
+                logger.info(f"[Post kit scheduler] Sent {sent} daily post kit(s)")
         except Exception as e:
-            logger.error(f"[Autonomous Scheduler] Loop tick error: {e}")
-
+            logger.error(f"[Post kit scheduler] Tick error: {e}")
         await asyncio.sleep(check_interval_seconds)
 
 

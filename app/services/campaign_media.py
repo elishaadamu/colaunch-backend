@@ -583,7 +583,9 @@ def generate_campaign_video(
     video_script: Optional[str] = None,
     project_id: Optional[str] = None,
     generated_by: Optional[str] = "admin",
-    max_wait_seconds: int = 360
+    max_wait_seconds: int = 360,
+    aspect_ratio: str = "9:16",
+    duration_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Generates video teaser/ad using Google GenAI Veo (veo-3.1-generate-preview) or OpenAI Video (Sora),
@@ -602,14 +604,23 @@ def generate_campaign_video(
         genai_client = _get_genai_client(resolved_gemini_key)
         if genai_client and hasattr(genai_client, "models") and hasattr(genai_client.models, "generate_videos"):
             logger.info(f"🎬 [GOOGLE GENAI VEO] Initiating video generation with veo-3.1-generate-preview (prompt: {prompt[:100]}...)...")
-            operation = genai_client.models.generate_videos(
-                model="veo-3.1-generate-preview",
-                prompt=prompt,
-            )
+            veo_config = None
+            try:
+                from google.genai import types as genai_types
+                cfg_kwargs = {"aspect_ratio": aspect_ratio or "9:16"}
+                if duration_seconds:
+                    cfg_kwargs["duration_seconds"] = max(4, min(8, int(duration_seconds)))
+                veo_config = genai_types.GenerateVideosConfig(**cfg_kwargs)
+            except Exception as cfg_err:
+                logger.info(f"Veo config not applied ({cfg_err}); using model defaults")
+            veo_kwargs = {"model": "veo-3.1-generate-preview", "prompt": prompt}
+            if veo_config is not None:
+                veo_kwargs["config"] = veo_config
+            operation = genai_client.models.generate_videos(**veo_kwargs)
 
             # Poll the operation status until the video is ready
             poll_start = time.time()
-            max_poll = min(max_wait_seconds, 120)
+            max_poll = min(max_wait_seconds, 300)
             while not operation.done and (time.time() - poll_start) < max_poll:
                 print("Waiting for video generation to complete...")
                 logger.info("Waiting for video generation to complete...")

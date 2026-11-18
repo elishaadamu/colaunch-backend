@@ -235,7 +235,8 @@ class SendCampaignPostEmailRequest(BaseModel):
 class ToggleAutonomousDeliveryRequest(BaseModel):
     enabled: bool
     recipientEmail: Optional[str] = None
-    preferredHour: Optional[int] = 0
+    preferredHour: Optional[int] = None
+    sendHour: Optional[int] = None
     timezone: Optional[str] = None
     country: Optional[str] = None
 
@@ -937,6 +938,12 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
         else:
             auto_del["enabled"] = bool(auto_del.get("enabled"))
         kit["autonomousEmailDelivery"] = auto_del
+
+        try:
+            from app.services.campaign_delivery import overlay_delivery_into_kit
+            overlay_delivery_into_kit(str(d.get("id") or ""), kit)
+        except Exception as ov_err:
+            logger.debug(f"[Post kit] overlay note: {ov_err}")
 
         d["campaignKit"] = kit
         d["campaign_kit"] = kit
@@ -2265,6 +2272,8 @@ def update_validation_campaign(
 
 class GenerateCampaignMediaRequest(BaseModel):
     prompt: Optional[str] = None
+    aspectRatio: Optional[str] = None      # "9:16" (Shorts/Reels/TikTok) or "16:9" (YouTube)
+    durationSeconds: Optional[int] = None  # Veo clip length (4-8s)
     apiKey: Optional[str] = None
     openaiApiKey: Optional[str] = None
     postImageUrl: Optional[str] = None
@@ -2572,7 +2581,9 @@ def generate_project_campaign_video(
             post_image_url=post_image_url,
             video_script=video_script,
             project_id=effective_proj_id,
-            generated_by=caller
+            generated_by=caller,
+            aspect_ratio=(body.aspectRatio if body and body.aspectRatio in ("9:16", "16:9") else "9:16"),
+            duration_seconds=(body.durationSeconds if body and body.durationSeconds else None),
         )
     except Exception as e:
         logger.error(f"Video generation error: {e}")
@@ -2754,17 +2765,26 @@ def toggle_autonomous_delivery_endpoint(
         or (getattr(proj, "email", "") if proj else "")
     )
 
+    from app.services import campaign_delivery as cd
+    pid_cfg = str((mongo_doc or {}).get("_id") or (mongo_doc or {}).get("id") or project_id)
+    prev_cfg = cd.get_delivery_config(pid_cfg) or {}
+    send_hour = body.sendHour if body.sendHour is not None else (body.preferredHour if body.preferredHour not in (None, 0) else prev_cfg.get("sendHour", cd.DEFAULT_SEND_HOUR))
+    durable = cd.save_delivery_config(pid_cfg, {
+        "enabled": bool(body.enabled), "recipientEmail": target_email,
+        "timezone": tz, "country": country, "sendHour": send_hour,
+    })
     delivery_config = {
         "enabled": bool(body.enabled),
         "recipientEmail": target_email,
-        "preferredHour": 0 if body.preferredHour is None else body.preferredHour,
+        "sendHour": durable["sendHour"],
+        "preferredHour": durable["sendHour"],
         "intervalHours": 24,
         "intervalSeconds": 86400,
         "cadence": "24_hours",
         "timezone": tz,
         "country": country,
-        "dispatchTime": "Every 24 Hours",
-        "dispatchSchedule": f"Every 24 Hours ({tz})",
+        "dispatchTime": f"Daily at {cd.format_hour(durable['sendHour'])}",
+        "dispatchSchedule": f"Daily at {cd.format_hour(durable['sendHour'])} ({tz})",
         "updatedAt": datetime.utcnow().isoformat()
     }
     kit["autonomousEmailDelivery"] = delivery_config

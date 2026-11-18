@@ -82,9 +82,11 @@ class EmailProvider:
         from_email: str = None,
         from_name: str = None,
         reply_to: str = None,
+        attachments: list = None,
     ) -> dict:
         """
         Sends an email prioritizing cloud-friendly HTTPS APIs (Port 443) before SMTP.
+        attachments: optional [{"filename": str, "content": bytes, "mime": "image/png"}].
         Returns {"message_id": str, "status": str}.
         """
         if not self.is_configured():
@@ -212,6 +214,23 @@ class EmailProvider:
             for c_part in inline_concept_parts:
                 msg.attach(c_part)
 
+            if attachments:
+                from email.mime.base import MIMEBase
+                from email import encoders
+                outer = MIMEMultipart("mixed")
+                for hk in ("Subject", "From", "Reply-To", "To"):
+                    outer[hk] = msg[hk]
+                    del msg[hk]
+                outer.attach(msg)
+                for att in attachments:
+                    maintype, _, subtype = (att.get("mime") or "application/octet-stream").partition("/")
+                    part = MIMEBase(maintype, subtype or "octet-stream")
+                    part.set_payload(att["content"])
+                    encoders.encode_base64(part)
+                    part.add_header("Content-Disposition", "attachment", filename=att["filename"])
+                    outer.attach(part)
+                msg = outer
+
             # Port 465 SSL via IPv4
             try:
                 server = _connect_smtp_multi_ipv4("smtp.gmail.com", 465, timeout=5, use_ssl=True)
@@ -263,6 +282,11 @@ class EmailProvider:
                             ]
                     except Exception as b_err:
                         logger.warning(f"[EmailProvider] Failed to attach inline logo for Brevo: {b_err}")
+                if attachments:
+                    import base64
+                    brevo_payload.setdefault("attachment", []).extend(
+                        {"content": base64.b64encode(a["content"]).decode("utf-8"), "name": a["filename"]} for a in attachments
+                    )
 
                 req = urllib.request.Request(
                     "https://api.brevo.com/v3/smtp/email",
@@ -312,6 +336,11 @@ class EmailProvider:
                             ]
                     except Exception as r_err:
                         logger.warning(f"[EmailProvider] Failed to attach inline logo for Resend: {r_err}")
+                if attachments:
+                    import base64
+                    resend_payload.setdefault("attachments", []).extend(
+                        {"content": base64.b64encode(a["content"]).decode("utf-8"), "filename": a["filename"]} for a in attachments
+                    )
 
                 req = urllib.request.Request(
                     "https://api.resend.com/emails",
@@ -347,6 +376,13 @@ class EmailProvider:
                         {"type": "text/html", "value": body_html},
                     ],
                 }
+                if attachments:
+                    import base64
+                    sg_payload["attachments"] = [
+                        {"content": base64.b64encode(a["content"]).decode("utf-8"), "filename": a["filename"],
+                         "type": a.get("mime") or "application/octet-stream", "disposition": "attachment"}
+                        for a in attachments
+                    ]
                 req = urllib.request.Request(
                     "https://api.sendgrid.com/v3/mail/send",
                     data=json.dumps(sg_payload).encode("utf-8"),
