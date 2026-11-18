@@ -108,7 +108,16 @@ def init_db():
                 conn.commit()
         except Exception:
             pass
-    
+
+    # MongoDB is the source of truth: rebuild the SQL working copy from it, then mirror every
+    # committed change on the outreach tables back into MongoDB.
+    try:
+        from app.mongo_persistence import restore_from_mongo, register_write_through
+        restore_from_mongo(engine)
+        register_write_through()
+    except Exception as _mp_err:
+        print(f"[DB INIT] MongoDB persistence setup notice: {_mp_err}")
+
     # Auto-seed the 'default' campaign if missing
     from app.models.campaign import Campaign
     from app.models.niche import TargetNiche
