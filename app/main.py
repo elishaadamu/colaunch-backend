@@ -385,27 +385,44 @@ def _is_public_http_url(raw_url: str) -> bool:
 def proxy_avatar(url: str):
     """Fetch a remote avatar image server-side and return it to avoid CORS blocks.
 
-    Hardened: public http(s) hosts only (re-checked on every redirect hop),
-    image content types only, and a 5 MB size cap.
+    Hardened against SSRF / content injection: http(s) only, public hosts only
+    (checked on every redirect hop), image/* responses only, 5 MB cap.
     """
     import httpx
-    from urllib.parse import urljoin
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
 
+    MAX_BYTES = 5 * 1024 * 1024
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Referer": "https://www.youtube.com/",
     }
-    MAX_BYTES = 5 * 1024 * 1024
+
+    def _is_public(target: str) -> bool:
+        parsed = urlparse(target)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return False
+        try:
+            infos = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+        except socket.gaierror:
+            return False
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if not ip.is_global or ip.is_multicast:
+                return False
+        return True
+
     try:
         current = url
         with httpx.Client(headers=HEADERS, timeout=10, follow_redirects=False) as client:
             for _ in range(5):
-                if not _is_public_http_url(current):
+                if not _is_public(current):
                     return Response(status_code=400)
                 r = client.get(current)
                 if r.is_redirect and r.headers.get("location"):
-                    current = urljoin(current, r.headers["location"])
+                    current = str(r.next_request.url) if r.next_request else r.headers["location"]
                     continue
                 break
             else:
