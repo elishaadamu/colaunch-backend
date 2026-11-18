@@ -34,9 +34,11 @@ def _public_survey_questions(doc: dict) -> list:
     """Survey questions (text only) for the public /survey page."""
     kit = doc.get("campaignKit") or doc.get("campaign_kit") or {}
     meta = doc.get("metadataInfo") or doc.get("metadata_info") or {}
+    vcamp = doc.get("validationCampaign") or doc.get("validation_campaign") or {}
     sources = [
-        (kit.get("research_survey") or {}).get("questions"),
+        (vcamp.get("researchSurvey") or vcamp.get("research_survey") or {}).get("questions"),
         (doc.get("surveyData") or {}).get("questions"),
+        (kit.get("research_survey") or {}).get("questions"),
         (meta.get("research_survey") or {}).get("questions"),
     ]
     questions = next((q for q in sources if isinstance(q, list) and q), None)
@@ -2232,6 +2234,12 @@ def update_validation_campaign(
     if res_survey is not None:
         camp["researchSurvey"] = res_survey
         camp["research_survey"] = res_survey
+        if isinstance(res_survey, dict):
+            proj["surveyData"] = res_survey
+            for kk in ("campaignKit", "campaign_kit"):
+                k_doc = proj.get(kk)
+                if isinstance(k_doc, dict) and isinstance(k_doc.get("research_survey"), dict) and res_survey.get("questions") is not None:
+                    k_doc["research_survey"]["questions"] = res_survey.get("questions")
     rev_status = body.review_status if body.review_status is not None else body.reviewStatus
     if rev_status is not None:
         camp["reviewStatus"] = rev_status
