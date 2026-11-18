@@ -53,6 +53,27 @@ def _filter_public_project_dict(doc: dict) -> dict:
         "creatorAvatar": doc.get("creatorAvatar") or doc.get("creator_avatar") or "",
         "currentPhase": int(doc.get("currentPhase") or doc.get("current_phase") or 1),
         "status": doc.get("status") or "active",
+        # Display-only fields the public landing page needs to render the *approved* Step 5 page
+        # (layout variant + colour) and the Phase 1 product mockup. No private data.
+        "selectedConcept": {
+            k: concept.get(k) for k in (
+                "id", "name", "tagline", "description", "problem", "customer", "keyFeatures", "pricing",
+                "archetype", "mockupType", "landingIndex", "landingBrandColor", "isCustomColor", "brandColor",
+                "revenueModel", "demographicAlignment",
+            ) if concept.get(k) is not None
+        },
+        "concepts": [
+            {"id": c.get("id"), "name": c.get("name"), "archetype": c.get("archetype")}
+            for c in (doc.get("concepts") or doc.get("productConcepts") or doc.get("product_concepts") or [])
+            if isinstance(c, dict)
+        ][:3],
+        "mockupImage": doc.get("mockupImage") or doc.get("mockup_image")
+            or (doc.get("metadataInfo") or {}).get("mockup_image") or (doc.get("meta") or {}).get("mockup_image"),
+        "campaignKit": {
+            "pricingConfig": (doc.get("campaignKit") or {}).get("pricingConfig")
+                or ((doc.get("validationCampaign") or {}).get("productAssets") or {}).get("pricingConfig"),
+            "landingPageCopy": (doc.get("campaignKit") or {}).get("landingPageCopy"),
+        },
     }
 
 
