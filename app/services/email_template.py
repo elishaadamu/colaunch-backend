@@ -521,7 +521,7 @@ def _render_single_concept_block(
     """Rich concept card styled around the concept's brand color and full product spec."""
     from urllib.parse import quote
 
-    default_cycle = (CRIMSON, "#10B981", "#06B6D4")
+    default_cycle = (CRIMSON, "#10B981", "#F59E0B")  # crimson · emerald · ember (matches frontend palette)
     accent_hex = _sanitize_brand_hex(
         concept.get("brandColor") or concept.get("brand_color") or concept.get("accentColor"),
         fallback=default_cycle[index % len(default_cycle)],

@@ -103,7 +103,7 @@ def format_daily_post_kit_email_html(
     
     <!-- Top Accent Bar (Obsidian with Emerald Gradient Accent) -->
     <tr>
-      <td height="4" style="background: linear-gradient(90deg, #0284c7 0%, #10b981 50%, #6366f1 100%); line-height: 4px; font-size: 4px;">&nbsp;</td>
+      <td height="4" style="background: linear-gradient(90deg, #c81e3c 0%, #10b981 50%, #f59e0b 100%); line-height: 4px; font-size: 4px;">&nbsp;</td>
     </tr>
 
     <!-- Header Block -->

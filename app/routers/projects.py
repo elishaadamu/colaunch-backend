@@ -101,6 +101,11 @@ class CreateProjectRequest(BaseModel):
     color_theme: Optional[str] = None
     portalLinkSent: Optional[bool] = False
     skipCreatorEmail: Optional[bool] = False
+    # Snapshot of the creator data collected in Section 1 (Apify discovery + enrichment):
+    # platform, profile URL, followers, engagement, score, bio, location, niche, etc.
+    creatorProfile: Optional[Dict[str, Any]] = None
+    audienceIntelligence: Optional[Dict[str, Any]] = None
+    audienceComments: Optional[List[Any]] = None
 
 
 class UpdatePlanRequest(BaseModel):
@@ -1254,6 +1259,19 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         existing_doc["selected_concept_frozen_at"] = now_iso
         existing_doc["presaleTarget"] = presale_target_val
         existing_doc["presale_target"] = presale_target_val
+        if body.creatorProfile:
+            existing_doc["creatorProfile"] = body.creatorProfile
+            existing_doc.setdefault("metadataInfo", {})
+            if isinstance(existing_doc["metadataInfo"], dict):
+                existing_doc["metadataInfo"]["creator_profile"] = body.creatorProfile
+        if body.audienceIntelligence:
+            existing_doc["audienceIntelligence"] = body.audienceIntelligence
+        if body.audienceComments:
+            existing_doc["audienceComments"] = body.audienceComments[:40]
+        if body.recentPosts or body.recent_posts or body.videos:
+            existing_doc.setdefault("metadataInfo", {})
+            if isinstance(existing_doc["metadataInfo"], dict):
+                existing_doc["metadataInfo"]["recent_posts"] = body.recentPosts or body.recent_posts or body.videos
 
         # Ensure unique slug
         if not existing_doc.get("slug"):
@@ -1506,7 +1524,13 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
             "reservations": [], "channelAttribution": {"instagram": 0, "youtube": 0, "twitter": 0, "direct": 0}, "experiments": [], "feedbackClusters": []
         },
         "gateDecisions": [],
+        # Section 1 data that Section 2 is built around (creator + approved concept)
+        "creatorProfile": body.creatorProfile or {},
+        "audienceIntelligence": body.audienceIntelligence or {},
+        "audienceComments": (body.audienceComments or [])[:40],
         "metadataInfo": {
+            "creator_profile": body.creatorProfile or {},
+            "audience_intelligence": body.audienceIntelligence or {},
             "recent_posts": body.recentPosts or body.recent_posts or body.videos or [],
             "channel_url": body.channelUrl or (f"https://www.youtube.com/@{c_handle.lstrip('@')}" if c_handle else ""),
             "channel_description": body.channelDescription or body.creatorBio or "",
