@@ -140,6 +140,87 @@ def _parse_email_message(msg):
     cleaned_body = _clean_email_body(raw_body)
     return subject, from_email, cleaned_body, raw_body
 
+# ── MongoDB → SQL creator hydration ──────────────────────────────────────────
+# Creators live in MongoDB. The SQL `creators` table is only a working copy that is
+# created lazily when an email is sent — and it's wiped whenever the SQL database is
+# in-memory (no Postgres DATABASE_URL) and the server restarts/redeploys/sleeps.
+# Without this, a genuine reply carrying CF-CID:<id> was discarded as "deleted creator".
+_SQL_CREATOR_STATUSES = {
+    "discovered", "qualified", "disqualified", "in_review", "approved", "rejected",
+    "suppressed", "contacted", "pitched", "partnered", "launched",
+}
+_SQL_PLATFORMS = {"instagram", "youtube", "tiktok", "twitter", "linkedin", "podcast"}
+
+
+def _hydrate_creator_from_mongo(db, creator_id: Optional[str] = None, handle: Optional[str] = None,
+                                email: Optional[str] = None):
+    """Find the creator in MongoDB and upsert a matching SQL Creator row. Returns it or None."""
+    try:
+        from app.mongodb import get_collection
+        coll = get_collection("creators")
+    except Exception as e:
+        logger.debug(f"[Inbox Poller] Mongo unavailable for hydration: {e}")
+        return None
+    if coll is None:
+        return None
+
+    query = []
+    if creator_id:
+        query += [{"_id": creator_id}, {"id": creator_id}]
+    if handle:
+        h = handle.lstrip("@").strip()
+        if h:
+            query += [{"handle": {"$regex": f"^@?{re.escape(h)}$", "$options": "i"}}]
+    if email:
+        query += [{"email_public": {"$regex": f"^{re.escape(email.strip())}$", "$options": "i"}},
+                  {"email": {"$regex": f"^{re.escape(email.strip())}$", "$options": "i"}}]
+    if not query:
+        return None
+    try:
+        doc = coll.find_one({"$or": query})
+    except Exception as e:
+        logger.debug(f"[Inbox Poller] Mongo hydration lookup failed: {e}")
+        return None
+    if not doc:
+        return None
+
+    c_id = str(doc.get("id") or doc.get("_id"))
+    existing = db.get(Creator, c_id)
+    if existing:
+        return existing
+
+    status = str(doc.get("status") or "contacted").lower()
+    if status not in _SQL_CREATOR_STATUSES:
+        status = "contacted"
+    platform = str(doc.get("platform") or "youtube").lower()
+    if platform not in _SQL_PLATFORMS:
+        platform = "youtube"
+    niche = doc.get("niche") or []
+    if isinstance(niche, str):
+        niche = [niche]
+    try:
+        creator = Creator(
+            id=c_id,
+            handle=str(doc.get("handle") or handle or c_id).lstrip("@"),
+            platform=platform,
+            display_name=doc.get("display_name") or doc.get("name") or doc.get("handle") or "Creator",
+            email_public=doc.get("email_public") or doc.get("email") or email,
+            follower_count=int(doc.get("follower_count") or 0) if str(doc.get("follower_count") or "0").isdigit() else 0,
+            niche=niche,
+            status=status,
+            discovery_notes=doc.get("discovery_notes"),
+        )
+        db.add(creator)
+        db.commit()
+        db.refresh(creator)
+        logger.info(f"[Inbox Poller] Restored creator {creator.handle} ({c_id}) from MongoDB into SQL working copy.")
+        return creator
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"[Inbox Poller] Could not hydrate creator {c_id}: {e}")
+        return None
+
+
 def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = "", raw_body: str = "", all_creators: Optional[List[Creator]] = None, msg_datetime: Optional[datetime] = None) -> Optional[str]:
     """Attempt to find the thread ID for a creator using tracking tokens, handle, subject, or email."""
     if not from_email:
@@ -156,7 +237,7 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
 
     if cid_match:
         cand_id = cid_match.group(1).strip()
-        c = db.get(Creator, cand_id)
+        c = db.get(Creator, cand_id) or _hydrate_creator_from_mongo(db, creator_id=cand_id)
         if c:
             creator_id = c.id
         else:
@@ -165,7 +246,8 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
             logger.info(f"[Inbox Poller] Explicit CF-CID token '{cand_id}' belongs to a deleted/inactive creator. Ignoring stale email.")
             return None
     elif cand_handle:
-        c = db.query(Creator).filter(Creator.handle.ilike(f"%{cand_handle}%")).first()
+        c = (db.query(Creator).filter(Creator.handle.ilike(f"%{cand_handle}%")).first()
+             or _hydrate_creator_from_mongo(db, handle=cand_handle))
         if c:
             creator_id = c.id
 
@@ -179,6 +261,10 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
 
     if all_creators is None:
         all_creators = db.query(Creator).all()
+    if not creator_id and not any((c.email_public or "").lower().strip() == from_email_clean for c in all_creators):
+        hydrated = _hydrate_creator_from_mongo(db, email=from_email_clean)
+        if hydrated:
+            all_creators = list(all_creators) + [hydrated]
 
     admin_email = (settings.GOOGLE_EMAIL or "").lower().strip()
     from_email = (settings.FROM_EMAIL or "").lower().strip()
@@ -254,11 +340,20 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
     ).order_by(OutreachMessage.sent_at.desc()).first()
 
     if not sent_outreach:
-        logger.info(f"[Inbox Poller] Creator {matched_creator.handle} ({creator_id}) has no sent outreach message in this run. Ignoring unaddressed email from {from_email_clean}.")
-        return None
+        # The SQL outreach log is lost when the in-memory DB restarts. A reply that quotes this
+        # creator's own tracking token (CF-CID / [#handle]) — or a creator whose MongoDB status
+        # shows they were contacted — is proof we emailed them, so keep the reply.
+        has_own_token = bool(cid_match) or bool(cand_handle)
+        was_contacted = (matched_creator.status or "") in (
+            "contacted", "in_review", "qualified", "approved", "pitched", "partnered", "launched",
+        )
+        if not (has_own_token or was_contacted):
+            logger.info(f"[Inbox Poller] Creator {matched_creator.handle} ({creator_id}) has no sent outreach message in this run. Ignoring unaddressed email from {from_email_clean}.")
+            return None
+        logger.info(f"[Inbox Poller] No SQL outreach log for {matched_creator.handle}; accepting reply via {'tracking token' if has_own_token else 'contacted status'}.")
 
     # Timing guard: ensure reply was not sent before outreach was initiated
-    if msg_datetime and sent_outreach.sent_at and not (cid_match or cand_handle):
+    if msg_datetime and sent_outreach and sent_outreach.sent_at and not (cid_match or cand_handle):
         from datetime import timezone
         if msg_datetime.tzinfo is not None:
             msg_dt_utc = msg_datetime.astimezone(timezone.utc).replace(tzinfo=None)

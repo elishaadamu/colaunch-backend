@@ -461,7 +461,18 @@ def send_direct_email(payload: DirectEmailRequest, db: Session = Depends(get_db)
     if creator:
         c_handle = (creator.handle or "").lstrip("@").strip()
         c_id = str(creator.id).strip()
-        tracking_token = f"[CF-STAGE:STEP3_INQUIRY | CF-CID:{c_id} | Handle:@{c_handle}]"
+        # Keep the stage the frontend stamped (e.g. STEP6 pitch, PROJECT_KICKOFF); default to STEP3.
+        # Hard-coding STEP3_INQUIRY made creator replies to the Step 6 pitch look like replies to
+        # the first outreach, so the concept choice in those replies was never detected.
+        import re as _re_stage
+        _stage_match = _re_stage.search(r"CF-STAGE:\s*([A-Za-z0-9_\-]+)", f"{payload.subject or ''} {payload.body or ''}")
+        if _stage_match:
+            stage = _stage_match.group(1).upper()
+        elif payload.concepts or _re_stage.search(r"concept 1|concept 2|concept 3|blueprint|opportunity deck|software concepts|pitch", f"{payload.subject or ''} {payload.body or ''}", _re_stage.I):
+            stage = "STEP6_PITCH"
+        else:
+            stage = "STEP3_INQUIRY"
+        tracking_token = f"[CF-STAGE:{stage} | CF-CID:{c_id} | Handle:@{c_handle}]"
         
         # Ensure handle or token is in subject if not already present
         if f"[#{c_handle}]" not in subject_to_send and f"CF-CID" not in subject_to_send:
