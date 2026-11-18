@@ -1,3 +1,4 @@
+from typing import Optional
 import httpx
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import RedirectResponse
@@ -188,29 +189,91 @@ class LaunchLoginRequest(BaseModel):
     email: str
     password: str
 
+
+class OperatorSignupRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    invite_code: Optional[str] = None
+
+
+def _login_success(email: str, name: str):
+    from app.auth import issue_operator_token, OPERATOR_TOKEN_TTL_SECONDS
+    import time
+    return {
+        "status": "success",
+        "message": "Operator authenticated successfully",
+        "token": issue_operator_token(),
+        "user": {"email": email, "name": name, "role": "operator_admin"},
+        "authenticated_at": int(time.time() * 1000),
+        "expires_in_seconds": OPERATOR_TOKEN_TTL_SECONDS,
+    }
+
+
 @router.post("/launch-login")
 def launch_login(payload: LaunchLoginRequest):
     """
     Validate operator credentials for /launch and internal administration routes.
-    Restricted to authorized operator email with 1-hour session duration.
+    Accepts the env-configured operator login or any registered operator account.
     """
-    from app.auth import verify_operator_credentials, issue_operator_token, OPERATOR_TOKEN_TTL_SECONDS
-    import time
+    from app.auth import verify_operator_credentials
+    from app.services.operator_accounts import authenticate_operator_account
 
     email_clean = (payload.email or "").strip().lower()
     if verify_operator_credentials(email_clean, payload.password or ""):
-        return {
-            "status": "success",
-            "message": "Operator authenticated successfully",
-            "token": issue_operator_token(),
-            "user": {
-                "email": email_clean,
-                "name": "Operator Admin",
-                "role": "operator_admin"
-            },
-            "authenticated_at": int(time.time() * 1000),
-            "expires_in_seconds": OPERATOR_TOKEN_TTL_SECONDS
-        }
+        return _login_success(email_clean, "Operator Admin")
 
-    raise HTTPException(status_code=401, detail="Invalid operator credentials. Access restricted.")
+    account = authenticate_operator_account(email_clean, payload.password or "")
+    if account:
+        return _login_success(account["email"], account["name"])
 
+    raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+
+@router.get("/operator-signup/status")
+def operator_signup_status():
+    """Tell the login screen whether invite-code signup is enabled (never reveals the code)."""
+    from app.services.operator_accounts import invite_code_configured
+    return {"invite_signup_enabled": invite_code_configured()}
+
+
+@router.post("/operator-signup", status_code=201)
+def operator_signup(payload: OperatorSignupRequest, request: Request):
+    """
+    Create an operator account. Allowed when the request carries a valid
+    OPERATOR_INVITE_CODE, or comes from an already signed-in operator.
+    """
+    from app.auth import get_current_auth, AuthRole
+    from app.services.operator_accounts import (
+        create_operator_account, invite_code_valid, invite_code_configured, SignupError,
+    )
+
+    caller = get_current_auth(
+        request,
+        authorization=request.headers.get("authorization"),
+        x_operator_token=request.headers.get("x-operator-token"),
+        x_portal_token=None,
+        token=None,
+        portal_token=None,
+    )
+    is_operator = caller.role == AuthRole.OPERATOR
+
+    if not is_operator:
+        if not invite_code_configured():
+            raise HTTPException(403, "Sign-up is closed. Ask an operator to invite you.")
+        if not invite_code_valid(payload.invite_code):
+            raise HTTPException(403, "That invite code isn't valid.")
+
+    try:
+        account = create_operator_account(
+            payload.name, payload.email, payload.password,
+            created_by="operator" if is_operator else "invite_code",
+        )
+    except SignupError as e:
+        raise HTTPException(e.status_code, e.detail)
+
+    # Invite-code signups are signed in immediately; operator-created accounts are not
+    # (the inviting operator keeps their own session).
+    if is_operator:
+        return {"status": "created", "user": account}
+    return _login_success(account["email"], account["name"])
