@@ -108,6 +108,15 @@ class CreateProjectRequest(BaseModel):
     audienceComments: Optional[List[Any]] = None
 
 
+
+# The old pre-filled template plan (created before the operator clicked Generate).
+_TEMPLATE_TEST_METHOD = "1) Co-founder video announcement, 2) 10 user interviews, 3) 48-hour Founding Pre-Order sprint"
+
+
+def _is_template_plan(plan: dict) -> bool:
+    return bool(plan) and plan.get("testMethod") == _TEMPLATE_TEST_METHOD and plan.get("status") == "ready" \
+        and not plan.get("locked")
+
 class UpdatePlanRequest(BaseModel):
     customer: Optional[str] = None
     problem: Optional[str] = None
@@ -1282,22 +1291,21 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
             existing_doc["product_slug"] = u_slug
 
         # Validation Plan
-        existing_doc["validationPlan"] = {
-            "id": f"plan_{existing_doc['id']}",
-            "customer": c_customer,
-            "problem": c_problem,
-            "offer": f"{product_name} Founding Co-Launch Access: {product_tagline}",
-            "pricing": pricing_str,
-            "testMethod": "1) Co-founder video announcement, 2) 10 user interviews, 3) 48-hour Founding Pre-Order sprint",
-            "period": "14 days",
-            "threshold": threshold_str,
-            "targetRevenue": presale_target_val,
-            "targetOrders": target_orders,
-            "status": "ready",
-            "generated": True,
-            "locked": False,
-        }
-        existing_doc["validation_plan"] = existing_doc["validationPlan"]
+        # Re-sync must never overwrite a plan the operator generated, approved or locked.
+        _prev_plan = existing_doc.get("validationPlan") or existing_doc.get("validation_plan") or {}
+        if not (_prev_plan.get("generated") and not _is_template_plan(_prev_plan)) and not _prev_plan.get("locked") \
+                and _prev_plan.get("status") != "approved":
+            existing_doc["validationPlan"] = {
+                "id": f"plan_{existing_doc['id']}",
+                "customer": "", "problem": "", "offer": "", "pricing": "", "testMethod": "",
+                "period": "", "threshold": "",
+                "targetRevenue": presale_target_val,
+                "targetOrders": target_orders,
+                "status": "draft",
+                "generated": False,
+                "locked": False,
+            }
+            existing_doc["validation_plan"] = existing_doc["validationPlan"]
 
         if "validationCampaign" in existing_doc and isinstance(existing_doc["validationCampaign"], dict):
             va = existing_doc["validationCampaign"].get("productAssets") or existing_doc["validationCampaign"].get("product_assets") or {}
@@ -1445,32 +1453,24 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         "color_theme": body.colorTheme or getattr(body, "color_theme", None) or concept_data.get("colorTheme") or "crimson",
         "validationPlan": {
             "id": f"plan_{proj_id}",
-            "customer": customer_desc,
-            "problem": problem_desc,
-            "offer": f"{product_name} Founding Co-Launch Access: {product_tagline}",
-            "pricing": pricing_str,
-            "testMethod": "1) Co-founder video announcement, 2) 10 user interviews, 3) 48-hour Founding Pre-Order sprint",
-            "period": "14 days",
-            "threshold": threshold_str,
+            # Empty until the operator clicks "Generate plan" in Phase 1 (no pre-filled template).
+            "customer": "", "problem": "", "offer": "", "pricing": "", "testMethod": "",
+            "period": "", "threshold": "",
             "targetRevenue": presale_target_val,
             "targetOrders": target_orders,
-            "status": "ready",
-            "generated": True,
+            "status": "draft",
+            "generated": False,
             "locked": False,
         },
         "validation_plan": {
             "id": f"plan_{proj_id}",
-            "customer": customer_desc,
-            "problem": problem_desc,
-            "offer": f"{product_name} Founding Co-Launch Access: {product_tagline}",
-            "pricing": pricing_str,
-            "testMethod": "1) Co-founder video announcement, 2) 10 user interviews, 3) 48-hour Founding Pre-Order sprint",
-            "period": "14 days",
-            "threshold": threshold_str,
+            # Empty until the operator clicks "Generate plan" in Phase 1 (no pre-filled template).
+            "customer": "", "problem": "", "offer": "", "pricing": "", "testMethod": "",
+            "period": "", "threshold": "",
             "targetRevenue": presale_target_val,
             "targetOrders": target_orders,
-            "status": "ready",
-            "generated": True,
+            "status": "draft",
+            "generated": False,
             "locked": False,
         },
         "validationCampaign": {
