@@ -194,23 +194,22 @@ def launch_login(payload: LaunchLoginRequest):
     Validate operator credentials for /launch and internal administration routes.
     Restricted to authorized operator email with 1-hour session duration.
     """
-    email_clean = (payload.email or "").strip().lower()
-    password_clean = payload.password or ""
+    from app.auth import verify_operator_credentials, issue_operator_token, OPERATOR_TOKEN_TTL_SECONDS
+    import time
 
-    if email_clean == "creatorforgeweb@gmail.com" and password_clean == "Upworkproject":
-        import time, uuid
-        token = f"forge_op_{uuid.uuid4().hex}"
+    email_clean = (payload.email or "").strip().lower()
+    if verify_operator_credentials(email_clean, payload.password or ""):
         return {
             "status": "success",
             "message": "Operator authenticated successfully",
-            "token": token,
+            "token": issue_operator_token(),
             "user": {
-                "email": "creatorforgeweb@gmail.com",
+                "email": email_clean,
                 "name": "Operator Admin",
                 "role": "operator_admin"
             },
             "authenticated_at": int(time.time() * 1000),
-            "expires_in_seconds": 3600
+            "expires_in_seconds": OPERATOR_TOKEN_TTL_SECONDS
         }
 
     raise HTTPException(status_code=401, detail="Invalid operator credentials. Access restricted.")

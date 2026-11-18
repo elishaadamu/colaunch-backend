@@ -8,12 +8,78 @@ Distinguishes between:
 """
 import os
 import re
+import hmac
+import time
+import hashlib
+import secrets
 import logging
 from typing import Optional
 from pydantic import BaseModel
 from fastapi import Request, Header, Query, HTTPException, Depends
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Operator credentials & signed session tokens
+# ---------------------------------------------------------------------------
+# Credentials come from env (OPERATOR_EMAIL / OPERATOR_PASSWORD). The legacy
+# defaults are kept only so existing deployments keep working — set the env
+# vars in production and rotate the password.
+_LEGACY_OPERATOR_EMAIL = "creatorforgeweb@gmail.com"
+_LEGACY_OPERATOR_PASSWORD = "Upworkproject"
+OPERATOR_TOKEN_PREFIX = "forge_op_"
+OPERATOR_TOKEN_TTL_SECONDS = 3600
+_warned_legacy_credentials = False
+
+
+def get_operator_credentials() -> tuple[str, str]:
+    email = (os.getenv("OPERATOR_EMAIL") or _LEGACY_OPERATOR_EMAIL).strip().lower()
+    password = os.getenv("OPERATOR_PASSWORD") or _LEGACY_OPERATOR_PASSWORD
+    global _warned_legacy_credentials
+    if not os.getenv("OPERATOR_PASSWORD") and not _warned_legacy_credentials:
+        _warned_legacy_credentials = True
+        logger.warning("[Auth] OPERATOR_PASSWORD not set — using legacy default credentials. Set it in the environment.")
+    return email, password
+
+
+def verify_operator_credentials(email: str, password: str) -> bool:
+    expected_email, expected_password = get_operator_credentials()
+    email_ok = hmac.compare_digest((email or "").strip().lower().encode(), expected_email.encode())
+    pass_ok = hmac.compare_digest((password or "").encode(), expected_password.encode())
+    return email_ok and pass_ok
+
+
+def _operator_signing_key() -> bytes:
+    explicit = os.getenv("OPERATOR_SIGNING_KEY") or os.getenv("SECRET_KEY")
+    if explicit:
+        return explicit.encode()
+    # Stable across workers/restarts: derived from the operator credentials, so
+    # rotating the password also invalidates every outstanding session.
+    email, password = get_operator_credentials()
+    return hashlib.sha256(f"colaunch-op::{email}::{password}".encode()).digest()
+
+
+def _sign(payload: str) -> str:
+    return hmac.new(_operator_signing_key(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+def issue_operator_token(ttl_seconds: int = OPERATOR_TOKEN_TTL_SECONDS) -> str:
+    """Return `forge_op_<expiry>.<nonce>.<hmac>` — unforgeable without the signing key."""
+    payload = f"{int(time.time()) + int(ttl_seconds)}.{secrets.token_hex(12)}"
+    return f"{OPERATOR_TOKEN_PREFIX}{payload}.{_sign(payload)}"
+
+
+def verify_operator_token(token: str) -> bool:
+    if not token or not token.startswith(OPERATOR_TOKEN_PREFIX):
+        return False
+    try:
+        expiry_str, nonce, sig = token[len(OPERATOR_TOKEN_PREFIX):].split(".", 2)
+        if int(expiry_str) < int(time.time()):
+            return False
+        return hmac.compare_digest(sig, _sign(f"{expiry_str}.{nonce}"))
+    except (ValueError, TypeError):
+        return False
 
 
 class AuthRole:
@@ -97,9 +163,9 @@ def get_current_auth(
     operator_secret = os.getenv("OPERATOR_SECRET_KEY", os.getenv("OPERATOR_TOKEN", "")).strip()
     is_operator = False
 
-    if raw_token.startswith("forge_op_") or raw_token.startswith("op_"):
+    if verify_operator_token(raw_token):
         is_operator = True
-    elif operator_secret and raw_token == operator_secret:
+    elif operator_secret and hmac.compare_digest(raw_token.encode(), operator_secret.encode()):
         is_operator = True
 
     if is_operator:

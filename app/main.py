@@ -360,18 +360,62 @@ def fix_avatars():
 
 
 # ── Avatar proxy (bypasses browser CORS on yt3.ggpht.com etc.) ───────────────
+def _is_public_http_url(raw_url: str) -> bool:
+    """Allow only http(s) URLs whose host resolves exclusively to public IPs (SSRF guard)."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(raw_url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return False
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                    or ip.is_multicast or ip.is_unspecified):
+                return False
+        return bool(infos)
+    except Exception:
+        return False
+
+
 @app.get("/api/proxy/avatar")
 def proxy_avatar(url: str):
-    """Fetch a remote avatar image server-side and return it to avoid CORS blocks."""
+    """Fetch a remote avatar image server-side and return it to avoid CORS blocks.
+
+    Hardened: public http(s) hosts only (re-checked on every redirect hop),
+    image content types only, and a 5 MB size cap.
+    """
     import httpx
+    from urllib.parse import urljoin
+
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Referer": "https://www.youtube.com/",
     }
+    MAX_BYTES = 5 * 1024 * 1024
     try:
-        r = httpx.get(url, headers=HEADERS, timeout=10, follow_redirects=True)
-        content_type = r.headers.get("content-type", "image/jpeg")
+        current = url
+        with httpx.Client(headers=HEADERS, timeout=10, follow_redirects=False) as client:
+            for _ in range(5):
+                if not _is_public_http_url(current):
+                    return Response(status_code=400)
+                r = client.get(current)
+                if r.is_redirect and r.headers.get("location"):
+                    current = urljoin(current, r.headers["location"])
+                    continue
+                break
+            else:
+                return Response(status_code=404)
+
+        content_type = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if r.status_code != 200 or not content_type.startswith("image/") or "svg" in content_type:
+            return Response(status_code=404)
+        if len(r.content) > MAX_BYTES:
+            return Response(status_code=413)
         return Response(
             content=r.content,
             media_type=content_type,
@@ -379,6 +423,7 @@ def proxy_avatar(url: str):
                 "Cache-Control": "public, max-age=86400",
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "X-Content-Type-Options": "nosniff",
             },
         )
     except Exception:

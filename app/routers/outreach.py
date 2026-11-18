@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response
+from app.auth import require_operator
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -312,7 +313,7 @@ def patch_message(message_id: str, body: PatchDraft, actor: str = "ops_dashboard
 
 @router.delete("/{message_id}")
 @router.delete("/messages/{message_id}")
-def delete_message(message_id: str, db: Session = Depends(get_db)):
+def delete_message(message_id: str, db: Session = Depends(get_db), _op=Depends(require_operator)):
     """Delete an outreach message and its associated thread if any."""
     msg = db.get(OutreachMessage, message_id)
     if not msg:
@@ -333,7 +334,7 @@ def delete_message(message_id: str, db: Session = Depends(get_db)):
 # ── Threads ──────────────────────────────────────────────────────────────────
 
 @router.delete("/threads/{thread_id}")
-def delete_thread(thread_id: str, db: Session = Depends(get_db)):
+def delete_thread(thread_id: str, db: Session = Depends(get_db), _op=Depends(require_operator)):
     """Delete a thread and its replies."""
     thread = db.get(Thread, thread_id)
     if not thread:
@@ -347,7 +348,7 @@ def delete_thread(thread_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/replies/{reply_id}")
-def delete_reply_endpoint(reply_id: str, db: Session = Depends(get_db)):
+def delete_reply_endpoint(reply_id: str, db: Session = Depends(get_db), _op=Depends(require_operator)):
     """Delete an individual reply message."""
     reply = db.get(Reply, reply_id)
     if not reply:

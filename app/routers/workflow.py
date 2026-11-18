@@ -3,7 +3,8 @@ import json
 import logging
 from datetime import datetime
 from typing import Optional, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from app.auth import require_operator
 from pydantic import BaseModel
 
 from app.mongodb import get_collection
@@ -137,7 +138,7 @@ def get_workflow_state():
 
 
 @router.delete("")
-def reset_workflow_state():
+def reset_workflow_state(_op=Depends(require_operator)):
     """Reset global workflow state back to pristine empty baseline in MongoDB Atlas, preserving any user-configured pass fee."""
     try:
         coll = get_collection("workflow_states")

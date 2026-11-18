@@ -1,5 +1,6 @@
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException
+from app.auth import require_operator
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -127,7 +128,7 @@ def add_niche(data: NicheCreateSchema, db: Session = Depends(get_db)):
 
 
 @router.delete("/{name}")
-def remove_niche(name: str, permanent: bool = True, db: Session = Depends(get_db)):
+def remove_niche(name: str, permanent: bool = True, db: Session = Depends(get_db), _op=Depends(require_operator)):
     """Remove a niche permanently from the DB."""
     name_clean = name.strip()
     existing = db.query(TargetNiche).filter(

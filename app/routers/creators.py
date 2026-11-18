@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
+from app.auth import require_operator
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -924,7 +925,7 @@ def suppress_creator(
 
 @router.delete("/all")
 @router.delete("")
-def delete_all_creators(db: Session = Depends(get_db)):
+def delete_all_creators(db: Session = Depends(get_db), _op=Depends(require_operator)):
     """Delete all creators and reset pipeline directly in MongoDB Atlas and SQL."""
     from app.mongodb import get_collection
     total_deleted = 0
@@ -1008,11 +1009,12 @@ def delete_all_creators(db: Session = Depends(get_db)):
 
 @router.delete("/{creator_id}")
 def delete_creator(
-    creator_id: str, actor: str = "ops_dashboard", db: Session = Depends(get_db)
+    creator_id: str, actor: str = "ops_dashboard", db: Session = Depends(get_db),
+    _op=Depends(require_operator),
 ):
     """Ops dashboard — delete a creator entirely with all dependencies cascaded from MongoDB Atlas and SQL."""
     if creator_id == "all":
-        return delete_all_creators(db=db)
+        return delete_all_creators(db=db, _op=_op)
 
     from app.mongodb import get_collection
     coll = get_collection("creators")
