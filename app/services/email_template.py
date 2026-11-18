@@ -52,16 +52,18 @@ F_HEAD = "'Cooper Black','Bookman Old Style',Rockwell,Georgia,'Times New Roman',
 F_BODY = "'Trebuchet MS','Gill Sans',Verdana,Helvetica,Arial,sans-serif"
 F_TYPE = "'Courier New',Courier,monospace"
 
-DEFAULT_LOGO_URL = "https://app.co-launch.app/images/colaunch_badge.png"
+DEFAULT_LOGO_URL = "https://colaunch-2.vercel.app/images/colaunch_badge.png"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Config helpers
 # ──────────────────────────────────────────────────────────────────────────────
 def _get_frontend_base() -> str:
+    """Public app base for every link/asset in emails (PUBLIC_APP_URL, default colaunch-2.vercel.app)."""
     return (
-        os.getenv("FRONTEND_URL")
-        or getattr(settings, "FRONTEND_URL", "https://app.co-launch.app")
+        os.getenv("PUBLIC_APP_URL")
+        or getattr(settings, "PUBLIC_APP_URL", "")
+        or "https://colaunch-2.vercel.app"
     ).rstrip("/")
 
 
@@ -1045,7 +1047,7 @@ def format_luxury_html_email(
 def render_otp_verification_email(
     code: str,
     display_name: str = "Creator",
-    base_url: str = "https://app.co-launch.app"
+    base_url: str = "https://colaunch-2.vercel.app"
 ) -> tuple:
     """Single-use verification code as a boarding-pass stub. Returns (body_html, body_text)."""
     clean_name = html.escape(display_name or "Creator")
@@ -1126,7 +1128,7 @@ def render_otp_verification_email(
 # ──────────────────────────────────────────────────────────────────────────────
 def render_welcome_signup_email(
     username: str,
-    base_url: str = "https://app.co-launch.app"
+    base_url: str = "https://colaunch-2.vercel.app"
 ) -> tuple:
     """Account-created onboarding email. Returns (body_html, body_text)."""
     clean_user = html.escape(username or "Creator")

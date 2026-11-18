@@ -87,6 +87,9 @@ class Settings:
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "creatorforgeweb@gmail.com")
     RECIPIENT_EMAIL: str = os.getenv("RECIPIENT_EMAIL", "adamsfair12@gmail.com")
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "https://app.co-launch.app")
+    # Public web app used in every link we put in emails (landing pages, pre-order, portal,
+    # dashboards). Paths + ids are appended, e.g. /concept/<creator>?concept=<slug>.
+    PUBLIC_APP_URL: str = (os.getenv("PUBLIC_APP_URL") or "https://colaunch-2.vercel.app").rstrip("/")
     BACKEND_URL: str = os.getenv("BACKEND_URL", "https://creator-forge-backend-jj1y.onrender.com")
 
     # =========================================================================

@@ -13,7 +13,7 @@ inbox code uses is only an in-process working copy (in-memory SQLite), so it is:
 Nothing here touches MongoDB documents of collections that are not mirrored.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from sqlalchemy import event, inspect as sa_inspect
@@ -145,6 +145,19 @@ def _restore_table(engine, table) -> int:
     return restored
 
 
+def _coerce_dt(value):
+    """Datetime or ISO string → naive UTC datetime; None when unknown (never 'now')."""
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if isinstance(value, str) and value.strip():
+        try:
+            dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            return dt if dt.tzinfo is None else dt.astimezone(timezone.utc).replace(tzinfo=None)
+        except ValueError:
+            return None
+    return None
+
+
 _SQL_CREATOR_STATUSES = {
     "discovered", "qualified", "disqualified", "in_review", "approved", "rejected",
     "suppressed", "contacted", "pitched", "partnered", "launched",
@@ -164,7 +177,8 @@ def _restore_creators(engine) -> int:
         existing = {r[0] for r in conn.execute(table.select().with_only_columns(table.c.id))}
         for doc in coll.find({}, {"_id": 1, "id": 1, "handle": 1, "platform": 1, "display_name": 1, "name": 1,
                                    "email_public": 1, "email": 1, "status": 1, "follower_count": 1, "niche": 1,
-                                   "bio": 1, "profile_url": 1, "avatar_url": 1, "discovery_notes": 1}):
+                                   "bio": 1, "profile_url": 1, "avatar_url": 1, "discovery_notes": 1,
+                                   "created_at": 1, "createdAt": 1}):
             c_id = str(doc.get("id") or doc.get("_id"))
             if not c_id or c_id in existing:
                 continue
@@ -191,6 +205,7 @@ def _restore_creators(engine) -> int:
                     profile_url=doc.get("profile_url"),
                     avatar_url=doc.get("avatar_url"),
                     discovery_notes=doc.get("discovery_notes"),
+                    created_at=_coerce_dt(doc.get("created_at") or doc.get("createdAt")),
                 ))
                 restored += 1
             except Exception as e:

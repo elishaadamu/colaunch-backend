@@ -495,10 +495,10 @@ def send_signup_email(req: SignupEmailRequest, request: Request):
             from urllib.parse import urlparse
             parsed = urlparse(origin)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
-            if "localhost:8000" in base_url or "127.0.0.1:8000" in base_url or "creator-forge" in base_url:
-                base_url = "https://app.co-launch.app"
+            if "localhost" in base_url or "127.0.0.1" in base_url or "creator-forge" in base_url:
+                base_url = settings.PUBLIC_APP_URL
         else:
-            base_url = "https://app.co-launch.app"
+            base_url = settings.PUBLIC_APP_URL
 
     from app.services.email_template import render_welcome_signup_email
     body_html, body_text = render_welcome_signup_email(
@@ -975,7 +975,7 @@ def auth_send_code(req: SendCodeRequest, request: Request):
             display_name = (m_user.get("creator_data") or {}).get("name") or m_user.get("username") or "Creator"
 
     import os
-    base_url = os.getenv("BASE_URL", "https://app.co-launch.app").rstrip('/')
+    base_url = (os.getenv("BASE_URL") or settings.PUBLIC_APP_URL).rstrip('/')
 
     from app.services.email_template import render_otp_verification_email
     body_html, body_text = render_otp_verification_email(
@@ -2780,9 +2780,7 @@ def community_broadcast_endpoint(req: CommunityBroadcastPayload, request: Reques
 
     # Resolve live Member Dashboard destination URL for this creator
     clean_handle = (req.handle or "").lstrip("@").strip() or "creator"
-    frontend_base = _get_frontend_base() or "https://app.co-launch.app"
-    if "creator-forge-frontend.vercel.app" in frontend_base or not frontend_base:
-        frontend_base = "https://app.co-launch.app"
+    frontend_base = settings.PUBLIC_APP_URL
     portal_url = f"{frontend_base}/member/{clean_handle}"
 
     # Universal placeholder replacement: replace any bracketed CTA link placeholder with the live member portal link

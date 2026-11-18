@@ -1558,7 +1558,7 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
         from app.config import settings
         creator_email = (c_email or "").strip()
         admin_email = (settings.ADMIN_EMAIL or "elishadamu97@gmail.com").strip()
-        base_frontend = (settings.FRONTEND_URL or "https://creator-forge-frontend.vercel.app").rstrip("/")
+        base_frontend = settings.PUBLIC_APP_URL
         portal_slug = (c_handle or "creator").replace("@", "").replace(" ", "").strip().lower()
         admin_project_link = f"{base_frontend}/launch?section=section2&project={proj_id}"
         portal_magic_link = f"{base_frontend}/portal/{portal_slug}?token=cf_sec_live&project={proj_id}"
@@ -2801,7 +2801,7 @@ def send_task_reminder(
     from app.config import settings
 
     creator_email = (proj.get("creatorEmail") or proj.get("creator_email") or settings.RECIPIENT_EMAIL or "").strip()
-    base_frontend = (settings.FRONTEND_URL or "https://creator-forge-frontend.vercel.app").rstrip("/")
+    base_frontend = settings.PUBLIC_APP_URL
     c_handle = proj.get("creatorHandle") or proj.get("creator_handle") or "creator"
     portal_slug = c_handle.replace("@", "").replace(" ", "").strip().lower()
     portal_magic_link = f"{base_frontend}/portal/{portal_slug}?token={proj.get('portalToken', 'cf_sec_live')}&project={proj.get('id')}"

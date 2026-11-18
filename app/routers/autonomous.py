@@ -1304,7 +1304,7 @@ def generate_audience_and_concepts(payload: AudienceAndConceptsGenerateSchema):
                     followers = f"{c_obj.follower_count:,}"
                 bio = c_obj.bio or bio
 
-    frontend_base = (os.getenv("FRONTEND_URL") or getattr(settings, "FRONTEND_URL", "http://localhost:3001")).rstrip("/")
+    frontend_base = settings.PUBLIC_APP_URL
 
     custom_steering_instruction = ""
     if custom_prompt:

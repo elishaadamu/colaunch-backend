@@ -76,7 +76,7 @@ def _format_admin_escalation_email(
     if not cid or cid.startswith("cr_"):
         cid = f"cr_{clean_h.lower()}" if clean_h else "cr_unlinked"
         
-    base_url = (settings.FRONTEND_URL or "https://app.co-launch.app").rstrip("/")
+    base_url = settings.PUBLIC_APP_URL
     dashboard_url = f"{base_url}/dashboard/{cid}" if cid else f"{base_url}/dashboard"
     hub_url = f"{base_url}/{clean_h.lower()}/{cid}" if clean_h and cid else dashboard_url
 
@@ -199,7 +199,7 @@ def _format_creator_confirmation_email(
     if not cid and clean_h:
         cid = f"cr_{clean_h.lower()}"
 
-    base_url = (settings.FRONTEND_URL or "https://app.co-launch.app").rstrip("/")
+    base_url = settings.PUBLIC_APP_URL
     dashboard_url = f"{base_url}/dashboard/{cid}" if cid else f"{base_url}/dashboard"
     hub_url = f"{base_url}/{clean_h.lower()}/{cid}" if clean_h and cid else dashboard_url
 

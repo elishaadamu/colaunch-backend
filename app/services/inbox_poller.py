@@ -5,7 +5,7 @@ import imaplib
 import logging
 import re
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
 from typing import Optional, List
 
@@ -152,6 +152,19 @@ _SQL_CREATOR_STATUSES = {
 _SQL_PLATFORMS = {"instagram", "youtube", "tiktok", "twitter", "linkedin", "podcast"}
 
 
+def _parse_doc_datetime(value) -> Optional[datetime]:
+    """Mongo created_at may be a datetime or an ISO string; return naive UTC or None."""
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo is None else value.astimezone(timezone.utc).replace(tzinfo=None)
+    if isinstance(value, str) and value.strip():
+        try:
+            dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+        except ValueError:
+            return None
+    return None
+
+
 def _hydrate_creator_from_mongo(db, creator_id: Optional[str] = None, handle: Optional[str] = None,
                                 email: Optional[str] = None):
     """Find the creator in MongoDB and upsert a matching SQL Creator row. Returns it or None."""
@@ -209,6 +222,8 @@ def _hydrate_creator_from_mongo(db, creator_id: Optional[str] = None, handle: Op
             niche=niche,
             status=status,
             discovery_notes=doc.get("discovery_notes"),
+            # Keep the real creation time (None if unknown) so the "email older than creator" guard is accurate.
+            created_at=_parse_doc_datetime(doc.get("created_at") or doc.get("createdAt")),
         )
         db.add(creator)
         db.commit()
@@ -246,8 +261,9 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
             logger.info(f"[Inbox Poller] Explicit CF-CID token '{cand_id}' belongs to a deleted/inactive creator. Ignoring stale email.")
             return None
     elif cand_handle:
-        c = (db.query(Creator).filter(Creator.handle.ilike(f"%{cand_handle}%")).first()
-             or _hydrate_creator_from_mongo(db, handle=cand_handle))
+        h = cand_handle.lstrip("@")
+        c = (db.query(Creator).filter((Creator.handle.ilike(h)) | (Creator.handle.ilike(f"@{h}"))).first()
+             or _hydrate_creator_from_mongo(db, handle=h))
         if c:
             creator_id = c.id
 
@@ -334,6 +350,18 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
         logger.info(f"[Inbox Poller] Creator {matched_creator.handle} ({creator_id}) is in 'discovered' status (uncontacted). Ignoring stale email.")
         return None
 
+    # An email can't belong to a creator who didn't exist yet when it was sent. This stops old
+    # inbox replies (to deleted creators that reused the same test email/handle) from being
+    # attached to new creators when the poller re-reads the last 14 days of the inbox.
+    if msg_datetime and matched_creator.created_at:
+        msg_dt_utc = msg_datetime.astimezone(timezone.utc).replace(tzinfo=None) if msg_datetime.tzinfo else msg_datetime
+        if msg_dt_utc < matched_creator.created_at - timedelta(hours=2):
+            logger.info(
+                f"[Inbox Poller] Email from {from_email_clean} dated {msg_dt_utc} predates creator "
+                f"{matched_creator.handle} (created {matched_creator.created_at}). Ignoring old email."
+            )
+            return None
+
     sent_outreach = db.query(OutreachMessage).filter(
         OutreachMessage.creator_id == creator_id,
         OutreachMessage.status == "sent"
@@ -354,7 +382,6 @@ def _find_thread_for_sender(db, from_email: str, subject: str = "", body: str = 
 
     # Timing guard: ensure reply was not sent before outreach was initiated
     if msg_datetime and sent_outreach and sent_outreach.sent_at and not (cid_match or cand_handle):
-        from datetime import timezone
         if msg_datetime.tzinfo is not None:
             msg_dt_utc = msg_datetime.astimezone(timezone.utc).replace(tzinfo=None)
         else:
