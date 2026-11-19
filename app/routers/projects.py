@@ -880,6 +880,9 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
         _meta = d.get("metadataInfo") or d.get("metadata_info") or {}
         _embedded = d.get("betaFeedback") or (_meta.get("beta_feedback") if isinstance(_meta, dict) else None) or []
         d.update(beta_overlay(str(d.get("id") or ""), _embedded))
+        from app.routers.build_agent import overlay_tasks
+        if d.get("engineeringTasks") is not None or d.get("id"):
+            d["engineeringTasks"] = overlay_tasks(str(d.get("id") or ""), d.get("engineeringTasks") or [])
         from app.routers.beta_program import staging_for
         _st = staging_for(str(d.get("id") or ""))
         if _st:

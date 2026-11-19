@@ -20,6 +20,7 @@ from app.routers import agent as agent_router
 from app.routers import auth as auth_router
 from app.routers import beta_program as beta_program_router
 from app.routers import launch as launch_router
+from app.routers import build_agent as build_agent_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -111,6 +112,8 @@ async def startup():
 
     # Phase 3: uptime checks for connected production URLs (every 5 minutes)
     asyncio.create_task(launch_router.start_uptime_loop(interval_seconds=300))
+    # Phase 2: re-check GitHub CI for commits the coding agent submitted (every 2 minutes)
+    asyncio.create_task(build_agent_router.start_ci_loop(interval_seconds=120))
 
     # Initialize MongoDB connection and verify collections
     try:
@@ -161,6 +164,7 @@ app.include_router(auth_router.router)
 app.include_router(autonomous.router)
 app.include_router(beta_program_router.router)
 app.include_router(launch_router.router)
+app.include_router(build_agent_router.router)
 app.include_router(projects.router)
 app.include_router(workflow.router)
 app.include_router(upload.router)
