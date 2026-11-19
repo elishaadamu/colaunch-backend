@@ -62,7 +62,20 @@ def _filter_public_project_dict(doc: dict) -> dict:
     p_id = str(doc.get("id") or doc.get("_id") or "")
     slug = str(doc.get("slug") or "")
     concept = doc.get("selectedConcept") or doc.get("selected_concept") or {}
+    _launch_cfg = {}
+    try:
+        from app.routers.launch import get_config as _launch_get_config
+        _launch_cfg = _launch_get_config(p_id) if p_id else {}
+    except Exception:
+        _launch_cfg = {}
     return {
+        "launchStatus": doc.get("launchStatus") or "PREP",
+        "publicMode": doc.get("publicMode") or ("live" if doc.get("launchStatus") == "LIVE" else "preorder"),
+        "liveAt": doc.get("liveAt"),
+        "launchPrice": _launch_cfg.get("price"),
+        "launchPriceLabel": _launch_cfg.get("priceLabel"),
+        "supportEmail": _launch_cfg.get("supportEmail"),
+        "faqs": (_launch_cfg.get("faqs") or [])[:12],
         "id": p_id,
         "slug": slug,
         "productName": doc.get("productName") or doc.get("product_name") or "Co-Launch Venture",
@@ -3397,6 +3410,12 @@ def create_project_checkout_session(
             "slug": proj.get("slug") or "",
         }
     )
+    try:
+        from app.routers.launch import record_checkout_started
+        record_checkout_started(p_id, session_res or {}, {"email": body.email, "name": body.name, "amount": resolved_amount,
+                                                          "tier": tier_name, "ref": ref_tag, "channel": body.channel})
+    except Exception as e:
+        logger.warning(f"[Launch] could not record checkout: {e}")
     return session_res
 
 
@@ -3428,6 +3447,11 @@ async def stripe_webhook(request: Request):
     if event_type == "checkout.session.completed":
         session_obj = event.get("data", {}).get("object", {})
         result = process_successful_checkout(session_obj)
+        try:
+            from app.routers.launch import mark_paid_from_webhook
+            mark_paid_from_webhook(session_obj)
+        except Exception as e:
+            logger.warning(f"[Launch] webhook order update: {e}")
         return {"status": "ok", "result": result}
 
     return {"status": "ignored", "event_type": event_type}

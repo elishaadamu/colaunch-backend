@@ -19,6 +19,7 @@ from app.routers import (
 from app.routers import agent as agent_router
 from app.routers import auth as auth_router
 from app.routers import beta_program as beta_program_router
+from app.routers import launch as launch_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -108,6 +109,9 @@ async def startup():
     # Start the autonomous 24-hour campaign post kit dispatcher loop
     asyncio.create_task(start_campaign_schedule_loop(check_interval_seconds=60))
 
+    # Phase 3: uptime checks for connected production URLs (every 5 minutes)
+    asyncio.create_task(launch_router.start_uptime_loop(interval_seconds=300))
+
     # Initialize MongoDB connection and verify collections
     try:
         from app.mongodb import check_mongo_connection, seed_from_backup_if_empty
@@ -156,6 +160,7 @@ app.include_router(content_calendar.router)
 app.include_router(auth_router.router)
 app.include_router(autonomous.router)
 app.include_router(beta_program_router.router)
+app.include_router(launch_router.router)
 app.include_router(projects.router)
 app.include_router(workflow.router)
 app.include_router(upload.router)
