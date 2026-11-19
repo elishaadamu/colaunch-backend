@@ -178,12 +178,45 @@ def diy_checkout(body: DiyCheckoutRequest):
         sess = stripe.checkout.Session.create(**params)
     except Exception as e:
         logger.error(f"[DIY] checkout failed: {e}")
+        if "payment method" in str(e).lower():
+            raise HTTPException(502, _stripe_setup_problem(key))
         raise HTTPException(502, f"Stripe could not start checkout: {str(e)[:200]}")
     c = _coll("diy_payments")
     if c is not None:
         c.update_one({"_id": sess.id}, {"$setOnInsert": {"project_id": pid, "amount": amount, "status": "pending",
                                                           "livemode": key.startswith(("sk_live", "rk_live")), "createdAt": _iso()}}, upsert=True)
     return {"checkoutUrl": sess.url, "sessionId": sess.id}
+
+
+def _stripe_setup_problem(key: str) -> str:
+    """Stripe refused to show any payment method: find out why, in words the operator can act on."""
+    mode = "live" if key.startswith(("sk_live", "rk_live")) else "test"
+    where = "Settings → Payments → Payment methods" + (" (with Test mode on)" if mode == "test" else " (with Test mode off)")
+    found = []
+    try:
+        import stripe
+        stripe.api_key = key
+        try:
+            acct = stripe.Account.retrieve()
+            if not acct.get("charges_enabled"):
+                found.append(f"the Stripe account ({acct.get('country') or 'unknown country'}) can't take {mode} payments yet: finish activation in Settings → Account (business details and a bank account)")
+        except Exception as e:
+            logger.info(f"[DIY] account check skipped: {e}")
+        try:
+            cfgs = stripe.PaymentMethodConfiguration.list(limit=20).get("data") or []
+            default = next((c for c in cfgs if c.get("is_default")), None)
+            if default is not None:
+                card = default.get("card") or {}
+                if not card.get("available"):
+                    found.append(f"Cards is off in the default payment method configuration: turn it on in {where}")
+        except Exception as e:
+            logger.info(f"[DIY] payment method check skipped: {e}")
+    except Exception:
+        pass
+    if found:
+        return "Stripe can't show a payment method because " + "; and ".join(found) + "."
+    return (f"Stripe has no payment method switched on for {mode} mode. Turn on Cards in {where}. "
+            + ("Live payments also need the account fully activated (Settings → Account)." if mode == "live" else ""))
 
 
 def _activate_project(pid: str, pay: Dict[str, Any]):
