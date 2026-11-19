@@ -182,7 +182,7 @@ def diy_checkout(body: DiyCheckoutRequest):
     c = _coll("diy_payments")
     if c is not None:
         c.update_one({"_id": sess.id}, {"$setOnInsert": {"project_id": pid, "amount": amount, "status": "pending",
-                                                          "livemode": key.startswith("sk_live"), "createdAt": _iso()}}, upsert=True)
+                                                          "livemode": key.startswith(("sk_live", "rk_live")), "createdAt": _iso()}}, upsert=True)
     return {"checkoutUrl": sess.url, "sessionId": sess.id}
 
 

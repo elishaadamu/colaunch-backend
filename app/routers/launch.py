@@ -76,7 +76,7 @@ def get_config(pid: str) -> Dict[str, Any]:
 def stripe_mode() -> str:
     from app.services.stripe_service import get_stripe_keys
     key = get_stripe_keys().get("secret_key") or ""
-    return "live" if key.startswith("sk_live") else "test" if key.startswith("sk_test") else "none"
+    return "live" if key.startswith(("sk_live", "rk_live")) else "test" if key.startswith(("sk_test", "rk_test")) else "none"
 
 
 # ── Orders ───────────────────────────────────────────────────────────────────────────────
