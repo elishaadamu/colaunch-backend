@@ -250,6 +250,7 @@ class StagingDeployRequest(BaseModel):
     entry: Optional[str] = None
     files: List[Dict[str, Any]]
     notes: Optional[str] = None
+    runtime: Optional[str] = None  # 'studio' = multi-file React app from the Build Studio
 
 
 def _pick_entry(files: List[Dict[str, Any]], preferred: Optional[str]) -> Optional[str]:
@@ -285,6 +286,7 @@ def deploy_staging(project_id: str, body: StagingDeployRequest, user=Depends(req
         "entry": entry,
         "files": files,
         "notes": (body.notes or "")[:500],
+        "runtime": body.runtime if body.runtime in ("studio",) else "legacy",
         "deployedAt": datetime.utcnow().isoformat(),
         "fileCount": len(files),
         "bytes": total,

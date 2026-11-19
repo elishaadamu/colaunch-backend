@@ -2989,9 +2989,19 @@ def record_gate_decision(
         proj["current_step"] = "optimize"
         proj["status"] = "validating"
         gate_status = "iterating"
-    else:
+    elif body.decision == "pass_to_phase3":
+        proj["currentPhase"] = 3
+        proj["current_phase"] = 3
+        proj["currentStep"] = "prep"
+        proj["current_step"] = "prep"
+        proj["status"] = "launched"
+        gate_status = "passed"
+    elif body.decision == "kill_project":
         proj["status"] = "killed"
         gate_status = "failed"
+    else:
+        # Unknown decisions must never change the project (they used to fall through to "killed")
+        raise HTTPException(400, f"Unknown gate decision: {body.decision}")
 
     gates = list(proj.get("gateDecisions") or proj.get("gate_decisions") or [])
     gates.insert(0, {
