@@ -862,6 +862,17 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
         _sync_survey_responses(d)
     except Exception as e:
         logger.error(f"[Survey] sync notice: {e}")
+    try:
+        from app.routers.beta_program import beta_overlay
+        _meta = d.get("metadataInfo") or d.get("metadata_info") or {}
+        _embedded = d.get("betaFeedback") or (_meta.get("beta_feedback") if isinstance(_meta, dict) else None) or []
+        d.update(beta_overlay(str(d.get("id") or ""), _embedded))
+        from app.routers.beta_program import staging_for
+        _st = staging_for(str(d.get("id") or ""))
+        if _st:
+            d["staging"] = _st
+    except Exception as e:
+        logger.debug(f"[Beta] overlay notice: {e}")
 
     # 1. Normalize pricing / DIY pass price
     cur_fee = d.get("diyFee") if d.get("diyFee") is not None else d.get("diyPassPrice")

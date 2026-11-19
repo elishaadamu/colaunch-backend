@@ -18,6 +18,7 @@ from app.routers import (
 )
 from app.routers import agent as agent_router
 from app.routers import auth as auth_router
+from app.routers import beta_program as beta_program_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -154,6 +155,7 @@ app.include_router(public_portal.router)
 app.include_router(content_calendar.router)
 app.include_router(auth_router.router)
 app.include_router(autonomous.router)
+app.include_router(beta_program_router.router)
 app.include_router(projects.router)
 app.include_router(workflow.router)
 app.include_router(upload.router)
