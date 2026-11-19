@@ -22,6 +22,7 @@ from app.routers import beta_program as beta_program_router
 from app.routers import launch as launch_router
 from app.routers import build_agent as build_agent_router
 from app.routers import build_studio as build_studio_router
+from app.routers import launch_ai as launch_ai_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -167,6 +168,7 @@ app.include_router(beta_program_router.router)
 app.include_router(launch_router.router)
 app.include_router(build_agent_router.router)
 app.include_router(build_studio_router.router)
+app.include_router(launch_ai_router.router)
 app.include_router(projects.router)
 app.include_router(workflow.router)
 app.include_router(upload.router)
