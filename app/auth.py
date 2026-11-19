@@ -291,6 +291,15 @@ def require_project_access(
 
         if target_clean in (user_p_id, user_slug, user_handle) or target_clean in [str(x).lower() for x in (user.project_ids or [])]:
             return user
+        # Signed-in creators address projects by handle or slug too: resolve it to the real project id
+        if user.account_id and user.project_ids:
+            try:
+                from app.routers.projects import _find_mongo_project
+                doc = _find_mongo_project(project_id)
+                if doc and str(doc.get("id") or doc.get("_id")) in user.project_ids:
+                    return user
+            except Exception as e:
+                logger.warning(f"[Auth] project lookup for creator session failed: {e}")
 
         raise HTTPException(
             status_code=403,
