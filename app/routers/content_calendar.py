@@ -89,7 +89,9 @@ def queue_calendar_post(post_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{post_id}/post", response_model=SuggestionResponse)
 def publish_calendar_post(post_id: str, db: Session = Depends(get_db)):
-    """Simulate publishing the post to the social platform (sets status to 'posted')."""
+    """Publish the post to the connected social account. Marked 'posted' only when the platform accepts it."""
+    published_id = None
+    publish_error = None
     post = db.get(PostSuggestion, post_id)
     if not post:
         raise HTTPException(404, "Post suggestion not found")
@@ -130,9 +132,9 @@ def publish_calendar_post(post_id: str, db: Session = Depends(get_db)):
                             business_id=ig_business_id,
                             caption=caption_text
                         ))
-                        print(f"Successfully posted to real Instagram! Media ID: {media_id}")
+                        published_id = media_id
                     except Exception as e:
-                        print(f"Warning: Real Instagram posting failed: {e}. Falling back to simulation.")
+                        publish_error = f"Instagram rejected the post: {e}"
 
     elif post.platform.lower() in ("facebook", "fb"):
         from app.models.creator import UserProfile, Creator
@@ -169,10 +171,12 @@ def publish_calendar_post(post_id: str, db: Session = Depends(get_db)):
                             access_token=fb_token,
                             message=message_text
                         ))
-                        print(f"Successfully posted to real Facebook! Post ID: {fb_post_id}")
+                        published_id = fb_post_id
                     except Exception as e:
-                        print(f"Warning: Real Facebook posting failed: {e}. Falling back to simulation.")
+                        publish_error = f"Facebook rejected the post: {e}"
 
+    if not published_id:
+        raise HTTPException(400, publish_error or f"{post.platform} isn't connected for this creator, so nothing was posted. Connect the account first.")
     post.status = "posted"
     db.commit()
     db.refresh(post)

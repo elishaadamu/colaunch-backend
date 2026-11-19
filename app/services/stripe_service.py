@@ -187,7 +187,7 @@ def process_successful_checkout(session_obj: Dict[str, Any]) -> Dict[str, Any]:
         cust_details.get("email")
         or session_obj.get("customer_email")
         or meta.get("customerEmail")
-        or "buyer@example.com"
+        or ""
     ).strip()
     name = (
         cust_details.get("name")

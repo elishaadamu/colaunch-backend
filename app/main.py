@@ -490,10 +490,10 @@ def send_signup_email(req: SignupEmailRequest, request: Request):
     from app.integrations.email_provider import email_provider
 
     if not email_provider.is_configured():
-        logging.warning("Email provider not fully configured. Simulating welcome email success.")
+        logging.warning("Email provider not configured; welcome email not sent.")
         return {
-            "status": "simulated",
-            "message": "Email configurations not set. Onboarding welcome email simulation succeeded.",
+            "status": "not_sent",
+            "message": "Email isn't configured on the server, so no welcome email was sent.",
             "recipient": req.email
         }
 
@@ -2760,7 +2760,7 @@ def community_broadcast_endpoint(req: CommunityBroadcastPayload, request: Reques
         if not norm or "@" not in norm or "." not in norm.split("@")[-1]:
             continue
         # Avoid standard mock dummy addresses
-        if norm.endswith("@example.com") or norm in ("sarah@lin.dev", "alex@rivera.io"):
+        if norm.endswith("@example.com"):
             continue
         if norm not in seen:
             seen.add(norm)

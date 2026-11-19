@@ -256,13 +256,6 @@ class ToggleAutonomousDeliveryRequest(BaseModel):
     country: Optional[str] = None
 
 
-class StartCampaignSimulationRequest(BaseModel):
-    recipientEmail: Optional[str] = None
-    intervalSeconds: Optional[int] = 42
-    totalPosts: Optional[int] = None
-
-
-
 def _sync_proj_to_mongo(proj_data: Dict[str, Any]):
     """Mirror project data directly into MongoDB co_launch_projects collection."""
     try:
@@ -2880,92 +2873,6 @@ def toggle_autonomous_delivery_endpoint(
     }
 
 
-@router.post("/{project_id}/campaign/start-simulation")
-async def start_campaign_simulation_endpoint(
-    project_id: str,
-    body: Optional[StartCampaignSimulationRequest] = None,
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_operator),
-):
-    """
-    Starts an autonomous 5-minute campaign email delivery simulation.
-    Sends Post 1, Post 2, Post 3, etc. spaced across the requested interval.
-    """
-    from app.services.autonomous_campaign_dispatcher import run_autonomous_campaign_simulation, get_simulation_status
-    mongo_doc = _find_mongo_project(project_id)
-    proj = db.get(CoLaunchProject, project_id) if db else None
-    if not proj and not mongo_doc:
-        raise HTTPException(404, f"Project '{project_id}' not found")
-
-    raw_kit = (
-        (mongo_doc.get("campaign_kit") or mongo_doc.get("campaignKit") or (mongo_doc.get("metadataInfo") or {}).get("campaign_kit") if mongo_doc else None)
-        or (proj.validation_campaign.campaign_kit if proj and proj.validation_campaign else None)
-        or (proj.metadata_info or {}).get("campaign_kit") if proj else {}
-        or {}
-    )
-    auto_config = raw_kit.get("autonomousEmailDelivery") or {}
-    recipient = (
-        (body.recipientEmail if body and body.recipientEmail else None)
-        or auto_config.get("recipientEmail")
-        or (mongo_doc.get("creatorEmail") or mongo_doc.get("creator_email") or mongo_doc.get("email") if mongo_doc else None)
-        or getattr(proj, "creator_email", None)
-        or getattr(proj, "email", None)
-    )
-    interval = (body.intervalSeconds if body and body.intervalSeconds else 42)
-    total_posts = (body.totalPosts if body and body.totalPosts else None)
-    prod_name = (mongo_doc.get("productName") or mongo_doc.get("product_name") if mongo_doc else None) or getattr(proj, "product_name", "Venture")
-
-    # Launch in background asyncio task
-    asyncio.create_task(run_autonomous_campaign_simulation(
-        project_id=project_id,
-        recipient_email=recipient,
-        interval_seconds=interval,
-        total_posts=total_posts
-    ))
-
-    return {
-        "success": True,
-        "message": f"Autonomous campaign simulation started for {prod_name}. Delivering posts every {interval}s to {recipient}.",
-        "status": get_simulation_status(project_id)
-    }
-
-
-@router.get("/{project_id}/campaign/simulation-status")
-def get_campaign_simulation_status_endpoint(
-    project_id: str,
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_operator),
-):
-    """Fetches real-time status and delivery logs for active autonomous simulation."""
-    from app.services.autonomous_campaign_dispatcher import get_simulation_status
-    mongo_doc = _find_mongo_project(project_id)
-    proj = db.get(CoLaunchProject, project_id) if db else None
-    if not proj and not mongo_doc:
-        raise HTTPException(404, f"Project '{project_id}' not found")
-    return {
-        "success": True,
-        "projectId": project_id,
-        "simulation": get_simulation_status(project_id)
-    }
-
-
-@router.post("/{project_id}/campaign/stop-simulation")
-def stop_campaign_simulation_endpoint(
-    project_id: str,
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_operator),
-):
-    """Cancels any running autonomous campaign simulation."""
-    from app.services.autonomous_campaign_dispatcher import stop_simulation, get_simulation_status
-    stopped = stop_simulation(project_id)
-    return {
-        "success": True,
-        "stopped": stopped,
-        "status": get_simulation_status(project_id)
-    }
-
-
-
 @router.get("/{project_id}/creator-tasks")
 def get_creator_tasks(
     project_id: str,
@@ -3051,58 +2958,6 @@ def send_task_reminder(
         email_provider.send(to_email=creator_email, subject=subject, body_text=body_text)
 
     return {"status": "success", "sent": True, "recipient": creator_email, "taskId": task_id, "channel": channel}
-
-
-@router.post("/{project_id}/reservations")
-def add_reservation(
-    project_id: str,
-    body: AddReservationRequest,
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_operator),
-):
-    """Record an operator simulated buyer pre-order / reservation in Step 4 Telemetry directly in MongoDB."""
-    proj = _find_mongo_project(project_id)
-    if not proj:
-        raise HTTPException(404, f"Project '{project_id}' not found")
-
-    telem = proj.get("telemetry") or {}
-    cur_res = list(telem.get("reservations") or [])
-    res_item = {
-        "id": f"res_{int(datetime.utcnow().timestamp()*1000)}",
-        "name": body.name,
-        "email": body.email,
-        "amount": float(body.amount),
-        "tier": body.tier,
-        "channel": body.channel,
-        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
-        "status": "paid",
-        "simulated": True,
-    }
-    cur_res.insert(0, res_item)
-    telem["reservations"] = cur_res
-    telem["presalesCount"] = len(cur_res)
-    new_revenue = sum(float(r.get("amount", 0)) for r in cur_res)
-    telem["presalesRevenue"] = new_revenue
-    proj["currentPresales"] = new_revenue
-    proj["current_presales"] = new_revenue
-    proj["reservations"] = cur_res
-
-    # Do not fabricate visitors from reservations count
-    cur_visitors = int(telem.get("visitors", 0))
-    telem["visitors"] = cur_visitors
-    proj["visitors"] = cur_visitors
-    conv = round((len(cur_res) / cur_visitors) * 100, 1) if cur_visitors > 0 else 0.0
-    telem["conversionRate"] = conv
-    proj["conversionRate"] = conv
-
-    cur_attr = dict(telem.get("channelAttribution") or {})
-    chan = body.channel or "direct"
-    cur_attr[chan] = cur_attr.get(chan, 0) + 1
-    telem["channelAttribution"] = cur_attr
-    proj["telemetry"] = telem
-
-    _save_mongo_project(proj)
-    return _normalize_mongo_project_dict(proj)
 
 
 @router.post("/{project_id}/gate-decision")
@@ -3233,103 +3088,6 @@ def track_project_visit(project_id: str, body: TrackVisitRequest, db: Session = 
     """Track a visit for a specific project ID."""
     body.projectId = project_id
     return record_visit_universal(body, db)
-
-
-@router.post("/record-preorder")
-def record_preorder_universal(
-    body: RecordPreorderRequest,
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(get_current_auth),
-):
-    """
-    Direct pre-order recording is restricted to Operators for simulation testing only.
-    Real customer pre-orders are processed strictly via verified Stripe webhooks.
-    """
-    if user.role != AuthRole.OPERATOR:
-        raise HTTPException(
-            status_code=403,
-            detail="Direct unverified preorder recording is disabled. Real payments are processed exclusively via Stripe webhook.",
-        )
-
-    from app.mongodb import get_collection
-    coll = get_collection("co_launch_projects")
-    if coll is None:
-        raise HTTPException(500, "Database unavailable")
-
-    proj = None
-    if body.projectId:
-        proj = _find_mongo_project(body.projectId)
-
-    if not proj and body.slug:
-        clean_slug = body.slug.lower().strip()
-        proj = coll.find_one({"$or": [
-            {"slug": clean_slug},
-            {"id": clean_slug},
-            {"creator_handle": clean_slug},
-            {"creatorHandle": clean_slug},
-            {"creator_handle": f"@{clean_slug}"},
-            {"creatorHandle": f"@{clean_slug}"},
-        ]})
-
-    if not proj:
-        raise HTTPException(404, "No active co-launch project found to record reservation")
-
-    telem = proj.get("telemetry") or {}
-    res_id = f"res_sim_{int(datetime.utcnow().timestamp()*1000)}"
-    timestamp_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-
-    reservation_item = {
-        "id": res_id,
-        "name": body.name,
-        "email": body.email,
-        "amount": float(body.amount),
-        "tier": body.tier or "Founding Pass",
-        "paymentMethod": body.paymentMethod or "Simulation",
-        "channel": body.channel or "Direct / Other",
-        "txId": body.txId or f"tx_{res_id}",
-        "timestamp": timestamp_str,
-        "status": "Paid",
-        "simulated": True,
-    }
-
-    cur_res = list(telem.get("reservations") or [])
-    cur_res.insert(0, reservation_item)
-    telem["reservations"] = cur_res
-    telem["presalesCount"] = len(cur_res)
-    new_revenue = sum(float(r.get("amount", 0)) for r in cur_res)
-    telem["presalesRevenue"] = new_revenue
-    proj["currentPresales"] = new_revenue
-    proj["current_presales"] = new_revenue
-    proj["reservations"] = cur_res
-
-    # Do not fabricate visitors; keep existing visitor count
-    cur_visitors = int(telem.get("visitors", 0))
-    conv = round((len(cur_res) / cur_visitors) * 100, 1) if cur_visitors > 0 else 0.0
-    telem["conversionRate"] = conv
-    proj["conversionRate"] = conv
-
-    cur_attr = dict(telem.get("channelAttribution") or {})
-    chan = body.channel or "Direct / Other"
-    cur_attr[chan] = cur_attr.get(chan, 0) + 1
-    telem["channelAttribution"] = cur_attr
-
-    meta = dict(proj.get("metadataInfo") or proj.get("metadata_info") or {})
-    act_logs = list(meta.get("activity_logs") or [])
-    act_item = {
-        "id": f"act_{int(datetime.utcnow().timestamp()*1000)}",
-        "action": "Simulated Pre-Order Recorded",
-        "details": f"${body.amount:.0f} {body.tier} simulated for {body.name} ({body.email})",
-        "category": "revenue_simulation",
-        "timestamp": timestamp_str,
-    }
-    act_logs.insert(0, act_item)
-    meta["activity_logs"] = act_logs[:50]
-    proj["metadataInfo"] = meta
-    proj["metadata_info"] = meta
-    proj["telemetry"] = telem
-
-    _save_mongo_project(proj)
-    return _normalize_mongo_project_dict(proj)
 
 
 @router.post("/create-checkout-session")
@@ -3516,7 +3274,7 @@ def record_survey_response_universal(
     timestamp_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
     res_name = (body.name or body.respondentName or "").strip() or "Community Member"
-    res_email = (body.email or body.respondentEmail or "").strip() or f"respondent_{res_id[-4:]}@example.com"
+    res_email = (body.email or body.respondentEmail or "").strip()
     res_rating = int(body.rating if body.rating is not None else (body.intentScore if body.intentScore is not None else 8))
 
     raw_support = body.support if isinstance(body.support, dict) else {}

@@ -58,10 +58,8 @@ async def instagram_login(request: Request, handle: str = "default", db: Session
         client_id = settings.META_CLIENT_ID
 
     if not client_id or client_id == "YOUR_META_APP_ID_HERE":
-        # If the user hasn't set up the Meta App yet, we can simulate success for demo purposes
-        # Or we could raise an error. Let's redirect to frontend with a fake success parameter 
-        # so the UI still works even without a real Meta App configured.
-        return RedirectResponse(f"{frontend_url}?tab=accounts&ig_connected=true&demo_mode=true")
+        # Not configured: say so instead of pretending the account connected
+        return RedirectResponse(f"{frontend_url}?tab=accounts&ig_connected=false&ig_error=meta_app_not_configured")
 
     # The required scopes for Instagram publishing
     scopes = "instagram_basic,instagram_content_publish,pages_read_engagement,pages_show_list"
