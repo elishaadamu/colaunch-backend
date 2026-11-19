@@ -77,7 +77,6 @@ def create_checkout_session(
                 unit_cents = 100  # Minimum 1 dollar
 
             session_params = {
-                "payment_method_types": ["card"],
                 "line_items": [{
                     "price_data": {
                         "currency": "usd",

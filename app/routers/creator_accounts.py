@@ -163,7 +163,6 @@ def diy_checkout(body: DiyCheckoutRequest):
         stripe.api_key = key
         params = {
             "mode": "payment",
-            "payment_method_types": ["card"],
             "line_items": [{"quantity": 1, "price_data": {
                 "currency": "usd", "unit_amount": int(round(amount * 100)),
                 "product_data": {"name": f"CoLaunch DIY pass: {product}",
