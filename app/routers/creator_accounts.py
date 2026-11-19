@@ -188,6 +188,38 @@ def diy_checkout(body: DiyCheckoutRequest):
     return {"checkoutUrl": sess.url, "sessionId": sess.id}
 
 
+class DiyPayRequest(BaseModel):
+    projectId: str
+    name: str
+    email: str
+    brand: Optional[str] = None
+    last4: str
+    exp: Optional[str] = None
+
+
+@router.post("/diy/pay")
+def diy_pay(body: DiyPayRequest):
+    """Simulated card payment for the DIY pass. No card is charged and the full number never reaches the
+    server: only the brand and last 4 digits are kept, and the record is flagged simulated."""
+    doc = _project(body.projectId)
+    pid = _pid(doc)
+    email = (body.email or "").strip().lower()
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(422, "Enter a valid email for the receipt.")
+    if not re.fullmatch(r"\d{4}", body.last4 or ""):
+        raise HTTPException(422, "Card details are incomplete.")
+    sid = f"sim_{secrets.token_hex(12)}"
+    amount = diy_price(doc)
+    c = _coll("diy_payments")
+    c.insert_one({"_id": sid, "project_id": pid, "status": "paid", "simulated": True, "amount": amount,
+                  "email": email, "name": (body.name or "").strip()[:80], "card_brand": (body.brand or "card")[:20],
+                  "card_last4": body.last4, "payment_intent": sid, "livemode": False,
+                  "createdAt": _iso(), "paidAt": _iso()})
+    pay = c.find_one({"_id": sid})
+    _activate_project(pid, pay)
+    return {"sessionId": sid, "amount": amount}
+
+
 def _stripe_setup_problem(key: str) -> str:
     """Stripe refused to show any payment method: find out why, in words the operator can act on."""
     mode = "live" if key.startswith(("sk_live", "rk_live")) else "test"
@@ -223,7 +255,9 @@ def _activate_project(pid: str, pay: Dict[str, Any]):
     """Write the DIY pass onto the project (overlaid on reads too, so a stale save can't drop it)."""
     sub = {
         "active": True, "status": "active", "plan": "diy_pass", "planName": "DIY pass",
-        "amount": pay.get("amount"), "billingCycle": "one_time", "paymentMethod": "Stripe",
+        "amount": pay.get("amount"), "billingCycle": "one_time",
+        "paymentMethod": f"{(pay.get('card_brand') or 'Card').title()} •••• {pay.get('card_last4')}" if pay.get("card_last4") else "Stripe",
+        "simulated": bool(pay.get("simulated")),
         "transactionId": pay.get("payment_intent") or pay.get("_id"), "unlockedAt": pay.get("paidAt") or _iso(),
         "unlockedPhases": [1, 2, 3], "livemode": pay.get("livemode", False),
     }
@@ -272,7 +306,8 @@ def diy_overlay(pid: str) -> Dict[str, Any]:
         return out
     out.update({"isDIY": True, "diyOfferStatus": "paid"})
     out["diySubscription"] = {"active": True, "status": "active", "plan": "diy_pass", "planName": "DIY pass", "amount": pay.get("amount"),
-                              "paymentMethod": "Stripe", "transactionId": pay.get("payment_intent") or pay.get("_id"),
+                              "paymentMethod": f"{(pay.get('card_brand') or 'Card').title()} •••• {pay.get('card_last4')}" if pay.get("card_last4") else "Stripe",
+                              "simulated": bool(pay.get("simulated")), "transactionId": pay.get("payment_intent") or pay.get("_id"),
                               "unlockedAt": pay.get("paidAt"), "unlockedPhases": [1, 2, 3], "livemode": pay.get("livemode", False)}
     acc = _accounts().find_one({"project_ids": pid}, {"email": 1, "name": 1, "createdAt": 1})
     out["creatorAccount"] = {"email": acc["email"], "name": acc.get("name"), "createdAt": acc.get("createdAt")} if acc else None
