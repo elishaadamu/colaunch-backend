@@ -94,6 +94,8 @@ class AuthenticatedUser(BaseModel):
     project_id: Optional[str] = None
     slug: Optional[str] = None
     creator_handle: Optional[str] = None
+    account_id: Optional[str] = None
+    project_ids: list = []
 
 
 def _extract_token(
@@ -171,6 +173,20 @@ def get_current_auth(
     if is_operator:
         return AuthenticatedUser(role=AuthRole.OPERATOR, identifier="operator")
 
+    # 1b. Signed-in DIY creator (email + password account)
+    if raw_token.startswith("forge_cr_"):
+        try:
+            from app.routers.creator_accounts import verify_creator_token
+            acc = verify_creator_token(raw_token)
+        except Exception as e:
+            logger.warning(f"[Auth] creator session check failed: {e}")
+            acc = None
+        if acc:
+            pids = [str(p) for p in (acc.get("project_ids") or [])]
+            return AuthenticatedUser(role=AuthRole.CREATOR, identifier=str(acc["_id"]), account_id=str(acc["_id"]),
+                                     project_id=pids[0] if pids else None, project_ids=pids)
+        return AuthenticatedUser(role=AuthRole.PUBLIC, identifier="public")
+
     # 2. Creator validation (lookup in MongoDB co_launch_projects)
     try:
         from app.mongodb import get_collection
@@ -234,6 +250,26 @@ def require_operator(user: AuthenticatedUser = Depends(get_current_auth)) -> Aut
     return user
 
 
+def require_project_owner(request: Request, user: AuthenticatedUser = Depends(get_current_auth)) -> AuthenticatedUser:
+    """Operator, or a signed-in DIY creator working on one of their own projects (path param pid / project_id)."""
+    if user.role == AuthRole.OPERATOR:
+        return user
+    if user.role == AuthRole.CREATOR and user.account_id:
+        target = str(request.path_params.get("pid") or request.path_params.get("project_id") or "")
+        if target and target in user.project_ids:
+            return user
+        if target:
+            try:
+                from app.routers.projects import _find_mongo_project
+                doc = _find_mongo_project(target)
+                if doc and str(doc.get("id") or doc.get("_id")) in user.project_ids:
+                    return user
+            except Exception:
+                pass
+        raise HTTPException(status_code=403, detail="Forbidden: this project belongs to another account.")
+    raise HTTPException(status_code=403, detail="Forbidden: sign in to use this.")
+
+
 def require_project_access(
     project_id: str,
     user: AuthenticatedUser = Depends(get_current_auth),
@@ -253,7 +289,7 @@ def require_project_access(
         user_slug = (user.slug or "").lower().strip()
         user_handle = (user.creator_handle or "").lower().strip()
 
-        if target_clean in (user_p_id, user_slug, user_handle):
+        if target_clean in (user_p_id, user_slug, user_handle) or target_clean in [str(x).lower() for x in (user.project_ids or [])]:
             return user
 
         raise HTTPException(

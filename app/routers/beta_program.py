@@ -240,7 +240,7 @@ def beta_feedback(body: BetaFeedbackRequest):
 
 # ── Staging deployment (operator) ────────────────────────────────────────────────────────
 from fastapi import Depends  # noqa: E402
-from app.auth import require_operator  # noqa: E402
+from app.auth import require_operator, require_project_owner  # noqa: E402
 
 MAX_STAGING_BYTES = 600_000
 
@@ -265,7 +265,7 @@ def _pick_entry(files: List[Dict[str, Any]], preferred: Optional[str]) -> Option
 
 
 @router.post("/staging/{project_id}")
-def deploy_staging(project_id: str, body: StagingDeployRequest, user=Depends(require_operator)):
+def deploy_staging(project_id: str, body: StagingDeployRequest, user=Depends(require_project_owner)):
     files = []
     total = 0
     for f in body.files or []:
@@ -313,7 +313,7 @@ def staging_for(project_id: str, with_files: bool = False) -> Optional[Dict[str,
 
 
 @router.delete("/feedback/{project_id}/{feedback_id}")
-def delete_beta_feedback(project_id: str, feedback_id: str, user=Depends(require_operator)):
+def delete_beta_feedback(project_id: str, feedback_id: str, user=Depends(require_project_owner)):
     fb = _coll("beta_feedback")
     if fb is not None:
         fb.delete_one({"_id": feedback_id, "project_id": project_id})

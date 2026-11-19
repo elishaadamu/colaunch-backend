@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.auth import require_operator
+from app.auth import require_operator, require_project_owner
 from app.routers.build_studio import _stream, _sse, _project, _coll
 
 logger = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ class PlanRequest(BaseModel):
 
 
 @router.post("/{pid}/plan")
-def launch_plan(pid: str, body: PlanRequest, user=Depends(require_operator)):
+def launch_plan(pid: str, body: PlanRequest, user=Depends(require_project_owner)):
     doc = _project(pid)
     ev = body.evidence or {}
     base = (ev.get("publicUrl") or "").rstrip("/")
@@ -141,7 +141,7 @@ class ManagerRequest(BaseModel):
 
 
 @router.post("/{pid}/manager")
-def launch_manager(pid: str, body: ManagerRequest, user=Depends(require_operator)):
+def launch_manager(pid: str, body: ManagerRequest, user=Depends(require_project_owner)):
     doc = _project(pid)
     msgs = [{"role": "system", "content": MANAGER_SYSTEM},
             {"role": "user", "content": f"Product: {doc.get('productName')} by {doc.get('creatorName')}. Offer: {body.offer or 'see metrics'}.\n"
@@ -177,7 +177,7 @@ class ReportRequest(BaseModel):
 
 
 @router.post("/{pid}/report")
-def launch_report(pid: str, body: ReportRequest, user=Depends(require_operator)):
+def launch_report(pid: str, body: ReportRequest, user=Depends(require_project_owner)):
     doc = _project(pid)
     msgs = [{"role": "system", "content": REPORT_SYSTEM},
             {"role": "user", "content": f"Product: {doc.get('productName')}.\nRESULTS:\n{json.dumps(body.report, default=str)[:16000]}"}]

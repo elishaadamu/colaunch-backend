@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.auth import require_operator
+from app.auth import require_operator, require_project_owner
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/studio", tags=["build-studio"])
@@ -218,7 +218,7 @@ class GenerateRequest(BaseModel):
 
 
 @router.post("/{pid}/generate")
-def generate(pid: str, body: GenerateRequest, user=Depends(require_operator)):
+def generate(pid: str, body: GenerateRequest, user=Depends(require_project_owner)):
     doc = _project(pid)
     st = _state(pid)
     files = st["files"]
@@ -271,7 +271,7 @@ def generate(pid: str, body: GenerateRequest, user=Depends(require_operator)):
 
 
 @router.post("/{pid}/backend-advice")
-def backend_advice(pid: str, user=Depends(require_operator)):
+def backend_advice(pid: str, user=Depends(require_project_owner)):
     doc = _project(pid)
     st = _state(pid)
     api_lines = []
@@ -302,7 +302,7 @@ def backend_advice(pid: str, user=Depends(require_operator)):
 
 
 @router.get("/{pid}")
-def studio_state(pid: str, user=Depends(require_operator)):
+def studio_state(pid: str, user=Depends(require_project_owner)):
     st = _state(pid)
     return {"files": st["files"], "messages": st["messages"][-60:], "advice": st.get("advice"),
             "checkpoints": [{k: v for k, v in cp.items() if k != "files"} for cp in st["checkpoints"]],
@@ -310,7 +310,7 @@ def studio_state(pid: str, user=Depends(require_operator)):
 
 
 @router.post("/{pid}/restore/{cp_id}")
-def restore(pid: str, cp_id: str, user=Depends(require_operator)):
+def restore(pid: str, cp_id: str, user=Depends(require_project_owner)):
     st = _state(pid)
     cp = next((c for c in st["checkpoints"] if c["id"] == cp_id), None)
     if not cp:

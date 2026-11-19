@@ -23,6 +23,7 @@ from app.auth import (
     get_current_auth,
     require_operator,
     require_project_access,
+    require_project_owner,
 )
 
 logger = logging.getLogger(__name__)
@@ -880,6 +881,8 @@ def _normalize_mongo_project_dict(d: Dict[str, Any], default_fee: float = 50.0) 
         _st = staging_for(str(d.get("id") or ""))
         if _st:
             d["staging"] = _st
+        from app.routers.creator_accounts import diy_overlay
+        d.update(diy_overlay(str(d.get("id") or "")))
     except Exception as e:
         logger.debug(f"[Beta] overlay notice: {e}")
 
@@ -2202,7 +2205,7 @@ def update_validation_plan(
     project_id: str,
     body: UpdatePlanRequest,
     db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_operator),
+    user: AuthenticatedUser = Depends(require_project_owner),
 ):
     """Save or update Step 1 Validation Plan directly in MongoDB Atlas."""
     proj = _find_mongo_project(project_id)
@@ -2733,7 +2736,7 @@ def send_campaign_post_email_endpoint(
     project_id: str,
     body: Optional[SendCampaignPostEmailRequest] = None,
     db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_operator),
+    user: AuthenticatedUser = Depends(require_project_owner),
 ):
     """
     Dispatches a ready-to-publish campaign post kit (caption + visual preview + asset download links)
@@ -2766,7 +2769,7 @@ def toggle_autonomous_delivery_endpoint(
     project_id: str,
     body: ToggleAutonomousDeliveryRequest,
     db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_operator),
+    user: AuthenticatedUser = Depends(require_project_owner),
 ):
     """
     Configures autonomous 24-hour delivery of scheduled post kits directly to creator/founder inbox.
@@ -2926,7 +2929,7 @@ def send_task_reminder(
     project_id: str,
     task_id: str,
     db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_operator),
+    user: AuthenticatedUser = Depends(require_project_owner),
 ):
     """Send an email reminder to creator directly using MongoDB Atlas project."""
     proj = _find_mongo_project(project_id)
@@ -2965,7 +2968,7 @@ def record_gate_decision(
     project_id: str,
     body: GateDecisionRequest,
     db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_operator),
+    user: AuthenticatedUser = Depends(require_project_owner),
 ):
     """Record Step 5 Executive Validation Gate decision directly in MongoDB."""
     proj = _find_mongo_project(project_id)
@@ -3217,6 +3220,10 @@ async def stripe_webhook(request: Request):
 
     if event_type == "checkout.session.completed":
         session_obj = event.get("data", {}).get("object", {})
+        if (session_obj.get("metadata") or {}).get("kind") == "diy_pass":
+            from app.routers.creator_accounts import mark_diy_paid
+            mark_diy_paid(session_obj)
+            return {"status": "ok", "result": "diy_pass"}
         result = process_successful_checkout(session_obj)
         try:
             from app.routers.launch import mark_paid_from_webhook
@@ -3387,7 +3394,7 @@ def delete_survey_response(
     project_id: str,
     response_id: str,
     db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_operator),
+    user: AuthenticatedUser = Depends(require_project_owner),
 ):
     """Delete a single survey response and recalculate question response counts in MongoDB Atlas."""
     doc = _find_mongo_project(project_id)
@@ -3454,7 +3461,7 @@ def delete_survey_response(
 def clear_all_survey_responses(
     project_id: str,
     db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_operator),
+    user: AuthenticatedUser = Depends(require_project_owner),
 ):
     """Clear all survey responses and reset question response counts to 0 in MongoDB Atlas."""
     doc = _find_mongo_project(project_id)

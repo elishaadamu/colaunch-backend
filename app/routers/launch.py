@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app.auth import require_operator
+from app.auth import require_operator, require_project_owner
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/launch", tags=["launch"])
@@ -324,7 +324,7 @@ class LaunchConfig(BaseModel):
 
 
 @router.put("/{pid}/config")
-def save_config(pid: str, body: LaunchConfig, user=Depends(require_operator)):
+def save_config(pid: str, body: LaunchConfig, user=Depends(require_project_owner)):
     c = _coll("launch_config")
     patch = {k: v for k, v in body.dict().items() if v is not None}
     if "productionUrl" in patch and patch["productionUrl"] and not re.match(r"^https?://", patch["productionUrl"]):
@@ -375,7 +375,7 @@ def readiness(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 @router.get("/{pid}/state")
-def launch_state(pid: str, user=Depends(require_operator)):
+def launch_state(pid: str, user=Depends(require_project_owner)):
     doc = _project(pid)
     if not doc:
         raise HTTPException(404, "Project not found")
@@ -394,7 +394,7 @@ class GoLiveRequest(BaseModel):
 
 
 @router.post("/{pid}/go-live")
-def go_live(pid: str, body: GoLiveRequest, user=Depends(require_operator)):
+def go_live(pid: str, body: GoLiveRequest, user=Depends(require_project_owner)):
     doc = _project(pid)
     if not doc:
         raise HTTPException(404, "Project not found")
@@ -434,7 +434,7 @@ def go_live(pid: str, body: GoLiveRequest, user=Depends(require_operator)):
 
 
 @router.post("/{pid}/pause")
-def pause_launch(pid: str, user=Depends(require_operator)):
+def pause_launch(pid: str, user=Depends(require_project_owner)):
     doc = _project(pid)
     if not doc:
         raise HTTPException(404, "Project not found")
@@ -469,7 +469,7 @@ def _window_stats(pid, start, end, orders, events):
 
 
 @router.get("/{pid}/metrics")
-def launch_metrics(pid: str, user=Depends(require_operator)):
+def launch_metrics(pid: str, user=Depends(require_project_owner)):
     doc = _project(pid)
     if not doc:
         raise HTTPException(404, "Project not found")
@@ -573,7 +573,7 @@ class DecisionRequest(BaseModel):
 
 
 @router.post("/{pid}/decision")
-def launch_decision(pid: str, body: DecisionRequest, user=Depends(require_operator)):
+def launch_decision(pid: str, body: DecisionRequest, user=Depends(require_project_owner)):
     if body.decision not in ("scale", "iterate", "maintain", "kill"):
         raise HTTPException(400, "Unknown decision")
     doc = _project(pid)
@@ -602,6 +602,6 @@ def launch_decision(pid: str, body: DecisionRequest, user=Depends(require_operat
 
 
 @router.get("/{pid}/decisions")
-def list_decisions(pid: str, user=Depends(require_operator)):
+def list_decisions(pid: str, user=Depends(require_project_owner)):
     dc = _coll("launch_decisions")
     return {"decisions": list(dc.find({"project_id": pid}, {"_id": 0}).sort("at", -1).limit(20)) if dc is not None else []}

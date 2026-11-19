@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
-from app.auth import require_operator
+from app.auth import require_operator, require_project_owner
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["build-agent"])
@@ -228,7 +228,7 @@ class GithubConnect(BaseModel):
 
 
 @router.put("/api/build/{pid}/github")
-def connect_github(pid: str, body: GithubConnect, user=Depends(require_operator)):
+def connect_github(pid: str, body: GithubConnect, user=Depends(require_project_owner)):
     repo = re.sub(r"^https?://github\.com/", "", body.repo.strip()).strip("/").removesuffix(".git")
     if not re.match(r"^[\w.-]+/[\w.-]+$", repo):
         raise HTTPException(400, "Use the form owner/repo")
@@ -251,7 +251,7 @@ def connect_github(pid: str, body: GithubConnect, user=Depends(require_operator)
 
 
 @router.delete("/api/build/{pid}/github")
-def disconnect_github(pid: str, user=Depends(require_operator)):
+def disconnect_github(pid: str, user=Depends(require_project_owner)):
     c = _coll("build_github")
     if c is not None:
         c.delete_one({"_id": pid})
@@ -263,7 +263,7 @@ class KeyCreate(BaseModel):
 
 
 @router.post("/api/build/{pid}/keys")
-def create_key(pid: str, body: KeyCreate, user=Depends(require_operator)):
+def create_key(pid: str, body: KeyCreate, user=Depends(require_project_owner)):
     if not _project(pid):
         raise HTTPException(404, "Project not found")
     key = "clk_" + secrets.token_urlsafe(32)
@@ -273,13 +273,13 @@ def create_key(pid: str, body: KeyCreate, user=Depends(require_operator)):
 
 
 @router.delete("/api/build/{pid}/keys/{prefix}")
-def revoke_key(pid: str, prefix: str, user=Depends(require_operator)):
+def revoke_key(pid: str, prefix: str, user=Depends(require_project_owner)):
     _coll("build_agent_keys").update_many({"project_id": pid, "prefix": prefix}, {"$set": {"revoked": True}})
     return {"ok": True}
 
 
 @router.get("/api/build/{pid}/status")
-def build_status(pid: str, user=Depends(require_operator)):
+def build_status(pid: str, user=Depends(require_project_owner)):
     kc, rc = _coll("build_agent_keys"), _coll("build_runs")
     keys = [{k: v for k, v in d.items() if k != "_id"} for d in kc.find({"project_id": pid, "revoked": False})] if kc is not None else []
     gh = github_config(pid)
@@ -289,7 +289,7 @@ def build_status(pid: str, user=Depends(require_operator)):
 
 
 @router.post("/api/build/{pid}/github/sync")
-def sync_ci(pid: str, user=Depends(require_operator)):
+def sync_ci(pid: str, user=Depends(require_project_owner)):
     st = _coll("build_task_state")
     n = 0
     for s in (st.find({"project_id": pid, "commit.sha": {"$exists": True}}) if st is not None else []):
@@ -300,7 +300,7 @@ def sync_ci(pid: str, user=Depends(require_operator)):
 
 
 @router.get("/api/build/{pid}/runs/{task_id}")
-def task_runs(pid: str, task_id: str, user=Depends(require_operator)):
+def task_runs(pid: str, task_id: str, user=Depends(require_project_owner)):
     rc = _coll("build_runs")
     return {"runs": list(rc.find({"project_id": pid, "task_id": task_id}, {"_id": 0}).sort("at", -1).limit(20)) if rc is not None else []}
 
