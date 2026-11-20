@@ -598,6 +598,8 @@ def launch_decision(pid: str, body: DecisionRequest, user=Depends(require_projec
         if dl is not None:
             dl.update_one({"_id": pid}, {"$set": {"enabled": False}})
     _save_mongo_project(doc)
+    from app.routers.sites import publish_on_launch
+    publish_on_launch(doc, body.decision)
     return {"ok": True, "status": status}
 
 
