@@ -101,6 +101,31 @@ def _public_view(site: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+REVISION_KEEP = 60
+AUTOSAVE_EVERY_SECONDS = 10 * 60
+
+
+def _snapshot(pid: str, draft: Dict[str, Any], rev: int, kind: str, user: Optional[AuthenticatedUser], force: bool = False) -> None:
+    """Keep restorable versions: every publish, and an autosave at most every 10 minutes."""
+    rc = _coll("site_revisions")
+    if rc is None or not isinstance(draft, dict) or not draft.get("sections"):
+        return
+    try:
+        if not force:
+            last = rc.find_one({"project_id": pid, "kind": "autosave"}, {"at": 1}, sort=[("at", -1)])
+            if last and (datetime.now(timezone.utc) - datetime.fromisoformat(last["at"])).total_seconds() < AUTOSAVE_EVERY_SECONDS:
+                return
+        import uuid
+        rc.insert_one({"_id": uuid.uuid4().hex, "project_id": pid, "rev": rev, "kind": kind, "at": _iso(),
+                       "by": (user.account_id and "creator") or ("operator" if user else "system") if user else "system",
+                       "sections": len(draft.get("sections") or []), "pages": len(draft.get("pages") or []), "draft": draft})
+        old = list(rc.find({"project_id": pid}, {"_id": 1}).sort("at", -1).skip(REVISION_KEEP))
+        if old:
+            rc.delete_many({"_id": {"$in": [o["_id"] for o in old]}})
+    except Exception as e:
+        logger.warning(f"[Sites] snapshot failed: {e}")
+
+
 def _get_site(pid: str) -> Optional[Dict[str, Any]]:
     c = _coll("sites")
     return c.find_one({"_id": pid}) if c is not None else None
@@ -198,6 +223,7 @@ def save_site(pid: str, body: SaveBody, user: AuthenticatedUser = Depends(requir
     res = c.find_one_and_update({"_id": real, "rev": rev} if site else {"_id": real}, {"$set": update}, upsert=not site, return_document=True)
     if res is None:
         raise HTTPException(409, detail={"message": "This page was changed in another tab.", "site": _public_view(c.find_one({"_id": real}))})
+    _snapshot(real, body.draft, res["rev"], "autosave", user)
     return {"ok": True, "rev": res["rev"], "updatedAt": now, "slug": res.get("slug")}
 
 
@@ -249,6 +275,8 @@ def _publish(doc: Dict[str, Any], notify: bool) -> Dict[str, Any]:
         site = {"_id": real, "project_id": real, "slug": _unique_slug(doc, real), "rev": 0, "draft": {"auto": True}, "createdAt": now}
         c.insert_one(site)
     c.update_one({"_id": real}, {"$set": {"published": site.get("draft") or {"auto": True}, "publishedAt": now, "publishedRev": site.get("rev", 0)}})
+    if (site.get("draft") or {}).get("sections"):
+        _snapshot(real, site["draft"], site.get("rev", 0), "publish", None, force=True)
     url = f"{_base_url()}/site/{site['slug']}"
     emailed = False
     if notify:
@@ -525,3 +553,24 @@ def ai_logo(pid: str, body: AILogoBody, request: Request, user: AuthenticatedUse
     if not svgs:
         raise HTTPException(502, "The AI didn't return usable logos. Try again.")
     return {"logos": [_upload_logo(s.encode("utf-8"), real, "svg") for s in svgs]}
+
+
+# ── Revision history ──────────────────────────────────────────────────────────────────────────────
+
+@router.get("/{pid}/revisions")
+def list_revisions(pid: str, user: AuthenticatedUser = Depends(require_project_owner)):
+    real = _pid(_resolve(pid))
+    rc = _coll("site_revisions")
+    items = list(rc.find({"project_id": real}, {"draft": 0}).sort("at", -1).limit(REVISION_KEEP)) if rc is not None else []
+    return {"revisions": [{"id": r["_id"], "rev": r.get("rev"), "kind": r.get("kind"), "at": r.get("at"), "by": r.get("by"),
+                           "sections": r.get("sections"), "pages": r.get("pages")} for r in items]}
+
+
+@router.get("/{pid}/revisions/{rid}")
+def get_revision(pid: str, rid: str, user: AuthenticatedUser = Depends(require_project_owner)):
+    real = _pid(_resolve(pid))
+    rc = _coll("site_revisions")
+    r = rc.find_one({"_id": rid, "project_id": real}) if rc is not None else None
+    if not r:
+        raise HTTPException(404, "That version no longer exists.")
+    return {"id": r["_id"], "at": r.get("at"), "kind": r.get("kind"), "draft": r.get("draft")}
