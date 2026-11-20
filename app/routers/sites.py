@@ -958,6 +958,9 @@ def ai_site(pid: str, body: AISiteBody, request: Request, user: AuthenticatedUse
             out_pages.insert(0, {"id": _sid(), "title": "Dashboard", "path": path, "menu": "header", "kind": "dashboard",
                                  "sections": [{"id": _sid(), "type": "dashboard", "hidden": False, "data": ddata}]})
             paths.add(path)
+            for sec in home:
+                if sec["type"] == "hero":
+                    sec["data"]["secondary"] = {"label": "Try the app", "href": "/dashboard"}
     # Menu labels stay short so the header never wraps.
     for pg in out_pages:
         if pg["menu"] in ("header", "footer") and len(pg["title"]) > 14:
