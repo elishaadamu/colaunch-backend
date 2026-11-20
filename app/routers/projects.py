@@ -1578,11 +1578,11 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
     problem_desc = c_problem
 
     sample_tasks = [
-        {"id": f"t_{proj_id}_1", "dayNumber": 1, "day": 1, "channel": "instagram", "task_title": "Post Instagram Story #1: Problem Teaser", "title": "Post Instagram Story #1: Problem Teaser", "content": f"Hey everyone! Notice how annoying {problem_desc.lower()} is? Co-founding a solution.", "cta": "Vote on poll + DM me", "trackingLink": f"/p/{slug}?utm=ig1", "status": "today"},
-        {"id": f"t_{proj_id}_2", "dayNumber": 2, "day": 2, "channel": "instagram", "task_title": "Post Instagram Story #2: Behind The Scenes", "title": "Post Instagram Story #2: Behind The Scenes", "content": f"Revealing {product_name} first build preview today!", "cta": "Tap link to view preview", "trackingLink": f"/p/{slug}?utm=ig2", "status": "pending"},
-        {"id": f"t_{proj_id}_3", "dayNumber": 3, "day": 3, "channel": "youtube", "task_title": "YouTube Video Integration (60s Mid-Roll)", "title": "YouTube Video Integration (60s Mid-Roll)", "content": f"Opening {target_orders} founding spots for {product_name} at 50% off (${founding_price}).", "cta": "Check pinned comment", "trackingLink": f"/p/{slug}?utm=yt", "status": "pending"},
-        {"id": f"t_{proj_id}_4", "dayNumber": 5, "day": 5, "channel": "newsletter", "task_title": "Newsletter Broadcast: Founding Cohort Announcement", "title": "Newsletter Broadcast: Founding Cohort Announcement", "content": f"Subject: Building something new with you.\n\nToday we open founding presales for {product_name} ($50% off - ${founding_price}).", "cta": f"Reserve Founding Access (${founding_price})", "trackingLink": f"/p/{slug}?utm=newsletter", "status": "pending"},
-        {"id": f"t_{proj_id}_5", "dayNumber": 7, "day": 7, "channel": "twitter", "task_title": "X/Twitter Breakdown Thread", "title": "X/Twitter Breakdown Thread", "content": f"1/5 Why existing tools fail for {customer_desc}.\n2/5 How we built {product_name}.\n3/5 Pre-orders open now.", "cta": f"Claim founding pass (${founding_price})", "trackingLink": f"/p/{slug}?utm=twitter", "status": "pending"},
+        {"id": f"t_{proj_id}_1", "dayNumber": 1, "day": 1, "channel": "instagram", "task_title": "Post Instagram Story #1: Problem Teaser", "title": "Post Instagram Story #1: Problem Teaser", "content": f"Hey everyone! Notice how annoying {problem_desc.lower()} is? Co-founding a solution.", "cta": "Vote on poll + DM me", "trackingLink": f"/preorder/{slug}?ref=ig1", "status": "today"},
+        {"id": f"t_{proj_id}_2", "dayNumber": 2, "day": 2, "channel": "instagram", "task_title": "Post Instagram Story #2: Behind The Scenes", "title": "Post Instagram Story #2: Behind The Scenes", "content": f"Revealing {product_name} first build preview today!", "cta": "Tap link to view preview", "trackingLink": f"/preorder/{slug}?ref=ig2", "status": "pending"},
+        {"id": f"t_{proj_id}_3", "dayNumber": 3, "day": 3, "channel": "youtube", "task_title": "YouTube Video Integration (60s Mid-Roll)", "title": "YouTube Video Integration (60s Mid-Roll)", "content": f"Opening {target_orders} founding spots for {product_name} at 50% off (${founding_price}).", "cta": "Check pinned comment", "trackingLink": f"/preorder/{slug}?ref=yt", "status": "pending"},
+        {"id": f"t_{proj_id}_4", "dayNumber": 5, "day": 5, "channel": "newsletter", "task_title": "Newsletter Broadcast: Founding Cohort Announcement", "title": "Newsletter Broadcast: Founding Cohort Announcement", "content": f"Subject: Building something new with you.\n\nToday we open founding presales for {product_name} ($50% off - ${founding_price}).", "cta": f"Reserve Founding Access (${founding_price})", "trackingLink": f"/preorder/{slug}?ref=newsletter", "status": "pending"},
+        {"id": f"t_{proj_id}_5", "dayNumber": 7, "day": 7, "channel": "twitter", "task_title": "X/Twitter Breakdown Thread", "title": "X/Twitter Breakdown Thread", "content": f"1/5 Why existing tools fail for {customer_desc}.\n2/5 How we built {product_name}.\n3/5 Pre-orders open now.", "cta": f"Claim founding pass (${founding_price})", "trackingLink": f"/preorder/{slug}?ref=twitter", "status": "pending"},
     ]
 
     new_project_doc = {
@@ -1701,8 +1701,8 @@ def execute_create_co_launch_project(db: Session, body: CreateProjectRequest) ->
                 "pricingTiers": pricing_tiers
             },
             "infrastructure": {
-                "landingPageUrl": f"/p/{slug}",
-                "checkoutUrl": f"/p/{slug}/checkout",
+                "landingPageUrl": f"/preorder/{slug}",
+                "checkoutUrl": f"/preorder/{slug}?checkout=1",
                 "waitlistCount": 0,
                 "attributionTracking": True,
                 "utmSource": "creator_launch"
@@ -3023,9 +3023,20 @@ def record_gate_decision(
     return _normalize_mongo_project_dict(proj)
 
 
+import threading as _threading
+# Visits and payments update the project document read-modify-write; serialise them so
+# simultaneous visitors/buyers can't overwrite each other's counts.
+PROJECT_WRITE_LOCK = _threading.RLock()
+
+
 @router.post("/record-visit")
 def record_visit_universal(body: TrackVisitRequest, db: Session = Depends(get_db)):
     """Universal public page visit recorder operating directly on MongoDB Atlas."""
+    with PROJECT_WRITE_LOCK:
+        return _record_visit_locked(body)
+
+
+def _record_visit_locked(body: TrackVisitRequest):
     if body.path and ("/dashboard" in body.path or "/admin" in body.path):
         return {"status": "ignored", "message": "Admin dashboard views are not tracked as customer visits"}
 
@@ -3049,6 +3060,8 @@ def record_visit_universal(body: TrackVisitRequest, db: Session = Depends(get_db
             {"creatorHandle": f"@{clean_slug}"},
         ]})
 
+    if not proj and body.slug:
+        proj = _find_mongo_project(body.slug)
     if not proj:
         raise HTTPException(404, "Project not found")
 
@@ -3168,6 +3181,20 @@ def create_project_checkout_session(
             resolved_amount = 49.0
 
     ref_tag = body.ref or body.channel or "direct"
+    if simulated_payments():
+        # Simulated card payments: no Stripe session, the buyer pays on our own card form and
+        # /simulated-payment records it through the same path a Stripe webhook would.
+        sid = f"sim_{uuid.uuid4().hex[:20]}"
+        session_res = {"sessionId": sid, "id": sid, "mode": "simulated", "simulated": True, "isTestMode": False,
+                       "amount": resolved_amount, "tier": tier_name}
+        try:
+            from app.routers.launch import record_checkout_started
+            record_checkout_started(p_id, session_res, {"email": body.email, "name": body.name, "amount": resolved_amount,
+                                                        "tier": tier_name, "ref": ref_tag, "channel": body.channel})
+        except Exception as e:
+            logger.warning(f"[Launch] could not record checkout: {e}")
+            raise HTTPException(503, "Checkout is unavailable right now. Try again in a moment.")
+        return session_res
     session_res = create_checkout_session(
         project_id=p_id,
         product_name=product_name,
@@ -3191,6 +3218,61 @@ def create_project_checkout_session(
     except Exception as e:
         logger.warning(f"[Launch] could not record checkout: {e}")
     return session_res
+
+
+def simulated_payments() -> bool:
+    """Card payments are simulated unless LIVE_PAYMENTS=1 is set on the server."""
+    import os
+    return os.getenv("LIVE_PAYMENTS", "").strip().lower() not in ("1", "true", "yes")
+
+
+class SimulatedPaymentRequest(BaseModel):
+    sessionId: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+    brand: Optional[str] = None
+    last4: Optional[str] = None
+
+
+@router.post("/{project_id}/simulated-payment")
+def simulated_payment(project_id: str, body: SimulatedPaymentRequest):
+    """Complete a simulated checkout. Only works for an open sim_ order of this project, once."""
+    if not simulated_payments():
+        raise HTTPException(403, "Card payments are live; use Stripe checkout.")
+    if not str(body.sessionId).startswith("sim_"):
+        raise HTTPException(400, "Unknown checkout.")
+    from app.mongodb import get_collection
+    oc = get_collection("launch_orders")
+    order = oc.find_one({"_id": body.sessionId}) if oc is not None else None
+    proj = _find_mongo_project(project_id)
+    if not order or not proj or str(order.get("project_id")) != str(proj.get("id") or proj.get("_id")):
+        raise HTTPException(404, "Checkout not found. Start again.")
+    if order.get("status") == "paid":
+        return {"status": "paid", "sessionId": body.sessionId, "amount": order.get("amount"), "duplicate": True}
+    last4 = re.sub(r"\D", "", body.last4 or "")[-4:]
+    if len(last4) != 4:
+        raise HTTPException(400, "Card details are incomplete.")
+    email = (body.email or order.get("email") or "").strip().lower()
+    name = (body.name or order.get("name") or "Founding Supporter").strip()
+    session_obj = {
+        "id": body.sessionId, "payment_intent": body.sessionId, "amount_total": int(round(float(order.get("amount") or 0) * 100)),
+        "currency": "usd", "customer_details": {"email": email, "name": name},
+        "metadata": {"projectId": str(order["project_id"]), "tier": order.get("tier") or "Founding Member Pass",
+                     "channel": order.get("channel") or "Direct / Other", "simulated": True},
+    }
+    from app.services.stripe_service import process_successful_checkout
+    with PROJECT_WRITE_LOCK:
+        res = process_successful_checkout(session_obj)
+    brand = (body.brand or "card").strip().lower()[:12]
+    oc.update_one({"_id": body.sessionId}, {"$set": {"status": "paid", "simulated": True, "paidAt": datetime.utcnow().isoformat(),
+                                                    "cardBrand": brand, "cardLast4": last4, "email": email, "name": name}})
+    try:
+        from app.routers.launch import on_new_customer
+        on_new_customer(order["project_id"], email, name)
+    except Exception as e:
+        logger.warning(f"[Launch] onboarding after simulated payment: {e}")
+    return {"status": "paid", "sessionId": body.sessionId, "amount": order.get("amount"), "totalRevenue": res.get("totalRevenue"),
+            "paymentMethod": f"{brand.title()} •••• {last4}"}
 
 
 @router.post("/stripe-webhook")
@@ -3224,7 +3306,8 @@ async def stripe_webhook(request: Request):
             from app.routers.creator_accounts import mark_diy_paid
             mark_diy_paid(session_obj)
             return {"status": "ok", "result": "diy_pass"}
-        result = process_successful_checkout(session_obj)
+        with PROJECT_WRITE_LOCK:
+            result = process_successful_checkout(session_obj)
         try:
             from app.routers.launch import mark_paid_from_webhook
             mark_paid_from_webhook(session_obj)

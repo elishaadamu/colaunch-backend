@@ -383,8 +383,10 @@ def discover_autonomous_creators(request: Request, data: DiscoverCreatorsSchema)
     if "youtube" in platforms and not _DISCOVERY_ABORT_EVENT.is_set():
         try:
             yt_found = []
-            search_limit = min(max(target_count, 6), 15)
-            for n in niches[:2]:
+            # Keep searching the selected niches until the target is met: previously scouted
+            # creators are excluded, so a single niche often can't fill a small batch on its own.
+            search_limit = min(max(target_count * 2, 10), 25)
+            for n in niches[:6]:
                 if _DISCOVERY_ABORT_EVENT.is_set():
                     break
                 found = search_youtube_channels(

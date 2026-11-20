@@ -64,8 +64,9 @@ def create_checkout_session(
         meta.update(metadata)
 
     # Base URLs
-    base_success = success_url or f"https://colaunch.app/p/{project_id}?checkout_success=true"
-    base_cancel = cancel_url or f"https://colaunch.app/p/{project_id}?checkout_cancelled=true"
+    from app.config import settings
+    base_success = success_url or f"{(getattr(settings, 'PUBLIC_APP_URL', '') or 'https://colaunch-2.vercel.app').rstrip('/')}/preorder/{project_id}?checkout_success=true"
+    base_cancel = cancel_url or f"{(getattr(settings, 'PUBLIC_APP_URL', '') or 'https://colaunch-2.vercel.app').rstrip('/')}/preorder/{project_id}?checkout_cancelled=true"
 
     if secret_key:
         try:

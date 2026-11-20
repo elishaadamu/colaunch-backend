@@ -1,4 +1,5 @@
 import app.ssl_patch  # Prevents macOS LibreSSL 2.8.3 TLS 1.3 session ticket double-free crash
+import os
 from typing import Optional, List, Dict, Any, Union
 from fastapi import FastAPI, Request, Depends
 from fastapi.staticfiles import StaticFiles
@@ -99,6 +100,10 @@ async def startup():
     await asyncio.to_thread(init_db)
     # Ensure autonomous table is registered
     from app.models.autonomous_campaign import AutonomousCampaign
+    if os.getenv("DISABLE_BACKGROUND_JOBS", "").strip() == "1":
+        # Local/test servers share the production database: never run pollers or senders there.
+        logger.info("[Startup] DISABLE_BACKGROUND_JOBS=1: background loops not started")
+        return
     # Start the IMAP poller loop with reduced frequency (300s) to minimize DB operations
     asyncio.create_task(start_poller_loop(interval_seconds=300))
     # Start the Customer Support IMAP reply monitor (every 15s)

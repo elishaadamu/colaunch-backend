@@ -496,9 +496,10 @@ def ai_code(pid: str, body: AICodeBody, request: Request, user: AuthenticatedUse
     return {"html": html[:40000], "css": css[:20000], "height": height}
 
 
-LOGO_SVG = ("You design simple, distinctive logos as SVG. Each logo: viewBox=\"0 0 240 64\", a compact geometric mark on the left "
-            "and the product name as text on the right (font-family: Inter, Helvetica, Arial, sans-serif; font-weight 700). "
-            "Flat colours only, no gradients, no filters, no images, no scripts, no external references. "
+LOGO_SVG = ("You design simple, distinctive logo marks (symbols) as SVG. Each mark: viewBox=\"0 0 64 64\", a compact geometric "
+            "symbol only, NO text or letters-as-words (a single initial is fine), centred, filling most of the box. Use the main colour "
+            "plus at most one supporting tint of it, so it reads on both light and dark backgrounds. Flat colours only, no gradients, "
+            "no filters, no images, no scripts, no external references, no background rectangle. "
             "Reply with JSON only: {\"logos\": [\"<svg …>…</svg>\", …]} with 3 clearly different concepts.")
 
 
