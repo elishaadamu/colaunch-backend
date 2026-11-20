@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -204,8 +204,19 @@ class BetaFeedbackRequest(BaseModel):
     message: str
 
 
+_fb_rate: Dict[str, list] = {}
+
+
 @router.post("/feedback")
-def beta_feedback(body: BetaFeedbackRequest):
+def beta_feedback(body: BetaFeedbackRequest, request: Request):
+    # Public endpoint: at most 10 reports a minute per address so it can't be flooded
+    import time as _t
+    ip = request.client.host if request.client else "?"
+    now = _t.time()
+    hits = [t for t in _fb_rate.get(ip, []) if now - t < 60]
+    if len(hits) >= 10:
+        raise HTTPException(429, "You're sending reports very quickly. Wait a minute and try again.")
+    _fb_rate[ip] = hits + [now]
     msg = (body.message or "").strip()
     if len(msg) < 3:
         raise HTTPException(400, "Write a little more so the team can act on it.")

@@ -227,6 +227,18 @@ def channel_kind(task: Dict[str, Any]) -> str:
     return "post"
 
 
+_PRODUCT_LINK_RE = re.compile(
+    r"https?://(?:[a-zA-Z0-9-]+\.)*(?:creatorforge\.app|colaunch[a-zA-Z0-9-]*\.vercel\.app|colaunch\.app|localhost:\d+)"
+    r"/(?:preorder|p|launch)(?:/[a-zA-Z0-9\-_]+)*(\?[^\s)\]\"'<>]*)?", re.I)
+
+
+def normalize_product_links(text: str, preorder_url: str) -> str:
+    """Point every product link in AI-written copy at the real pre-order page, keeping ?ref= tracking."""
+    if not text or not preorder_url:
+        return text
+    return _PRODUCT_LINK_RE.sub(lambda m: preorder_url + (m.group(1) or ""), text)
+
+
 def ref_for(kind: str) -> str:
     return {"video": "tiktok_video", "story": "instagram_story", "newsletter": "newsletter", "dm": "dm_outreach"}.get(kind, "x_post")
 
@@ -323,6 +335,7 @@ def build_post_kit_email(
     attached: List[str] = None,
 ) -> Tuple[str, str]:
     """Return (html, text) for the creator's daily post kit."""
+    caption = normalize_product_links(caption, (link or "").split("?")[0])
     kind = channel_kind(task)
     first = (creator_name or "there").split(" ")[0]
     title = task.get("title") or "Today's post"
