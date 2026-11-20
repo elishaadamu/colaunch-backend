@@ -87,10 +87,22 @@ def _project_summary(doc: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _handle(doc: Optional[Dict[str, Any]]) -> str:
+    h = str((doc or {}).get("creatorHandle") or (doc or {}).get("creator_handle") or "").lstrip("@").strip().lower()
+    return re.sub(r"[^a-z0-9_.-]", "", h)
+
+
+def _site_path(doc: Optional[Dict[str, Any]], slug: str) -> str:
+    """Public address: /<creator handle>/<site slug>, or /site/<slug> when the project has no handle."""
+    h = _handle(doc)
+    return f"/{h}/{slug}" if h else f"/site/{slug}"
+
+
 def _public_view(site: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "slug": site.get("slug"),
-        "url": f"{_base_url()}/site/{site.get('slug')}" if site.get("slug") else None,
+        "url": f"{_base_url()}{_site_path(_project(site['_id']), site['slug'])}" if site.get("slug") else None,
+        "path": _site_path(_project(site['_id']), site['slug']) if site.get("slug") else None,
         "rev": site.get("rev", 0),
         "draft": site.get("draft"),
         "updatedAt": site.get("updatedAt"),
@@ -148,15 +160,17 @@ class SignupBody(BaseModel):
 # ── Public ────────────────────────────────────────────────────────────────────────────────
 
 @router.get("/public/{slug}")
-def public_site(slug: str):
+def public_site(slug: str, handle: Optional[str] = None):
     c = _coll("sites")
     site = c.find_one({"slug": slug.lower().strip()}) if c is not None else None
     if not site or not site.get("published"):
         raise HTTPException(404, "This page isn't published.")
     doc = _project(site["_id"]) or {}
+    if handle is not None and handle.lstrip("@").strip().lower() != _handle(doc):
+        raise HTTPException(404, "This page isn't published.")
     if (doc.get("status") == "killed") or doc.get("publicMode") == "closed":
         raise HTTPException(410, "This product is no longer available.")
-    return {"slug": site["slug"], "site": site["published"], "publishedAt": site.get("publishedAt"), "project": _project_summary(doc)}
+    return {"slug": site["slug"], "path": _site_path(doc, site["slug"]), "site": site["published"], "publishedAt": site.get("publishedAt"), "project": _project_summary(doc)}
 
 
 @router.post("/public/{slug}/signup", status_code=201)
@@ -197,7 +211,8 @@ def get_site(pid: str, user: AuthenticatedUser = Depends(require_project_owner))
     sc = _coll("site_signups")
     signups = sc.count_documents({"project_id": real}) if sc is not None else 0
     return {"project": _project_summary(doc), "site": _public_view(site) if site else None, "signups": signups,
-            "suggestedSlug": (site or {}).get("slug") or _unique_slug(doc, real)}
+            "suggestedSlug": (site or {}).get("slug") or _unique_slug(doc, real),
+            "basePath": _site_path(doc, (site or {}).get("slug") or _unique_slug(doc, real))}
 
 
 @router.put("/{pid}")
@@ -277,7 +292,7 @@ def _publish(doc: Dict[str, Any], notify: bool) -> Dict[str, Any]:
     c.update_one({"_id": real}, {"$set": {"published": site.get("draft") or {"auto": True}, "publishedAt": now, "publishedRev": site.get("rev", 0)}})
     if (site.get("draft") or {}).get("sections"):
         _snapshot(real, site["draft"], site.get("rev", 0), "publish", None, force=True)
-    url = f"{_base_url()}/site/{site['slug']}"
+    url = f"{_base_url()}{_site_path(doc, site['slug'])}"
     emailed = False
     if notify:
         emailed = _send_site_email(doc, real, url)
