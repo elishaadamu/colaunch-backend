@@ -703,7 +703,7 @@ def _sid() -> str:
     return _s.token_hex(4)
 
 
-_ALLOWED = {"nav", "hero", "features", "text", "gallery", "steps", "stats", "pricing", "faq", "signup", "cta", "posts", "footer"}
+_ALLOWED = {"dashboard", "nav", "hero", "features", "text", "gallery", "steps", "stats", "pricing", "faq", "signup", "cta", "posts", "footer"}
 
 
 def _link(v, fix) -> Dict[str, str]:
@@ -719,7 +719,7 @@ def ai_site(pid: str, body: AISiteBody, request: Request, user: AuthenticatedUse
     doc = _resolve(pid)
     slug = doc.get("slug") or _pid(doc)
     buy = f"/preorder/{slug}"
-    wanted = [p for p in (body.pages or []) if p in ("about", "blog", "contact", "faq", "pricing", "terms", "privacy")] or ["about", "blog", "contact", "terms", "privacy"]
+    wanted = [p for p in (body.pages or []) if p in ("dashboard", "about", "blog", "contact", "faq", "pricing", "terms", "privacy")] or ["dashboard", "about", "blog", "contact", "terms", "privacy"]
     p1 = _phase1(doc)
     look = (f"dark interface aesthetic: deep near-black background (#08090c) with soft {p1['color']} accent light, calm, premium, "
             "modern software product for real people")
@@ -746,7 +746,7 @@ def ai_site(pid: str, body: AISiteBody, request: Request, user: AuthenticatedUse
         "\"home\": [{\"type\", \"anchor\", \"data\"}]}. Nav links point to 3 or 4 key home sections (#anchors); the nav cta goes to the pre-order page.")
     pages_prompt = ctx + (
         "Write the OTHER pages of the site (not the home page).\n"
-        f"Pages: {', '.join(wanted)}. Each page has 2 to 4 sections from the list (no nav or footer) with real, specific copy:\n"
+        f"Pages: {', '.join(w for w in wanted if w != 'dashboard')}. Each page has 2 to 4 sections from the list (no nav or footer) with real, specific copy:\n"
         "- about: a text section with the story (3 paragraphs, imagePrompt), features as 'what we believe' (3 items), cta.\n"
         "- contact: text with how to reach the team and response time, faq (3 support questions), signup.\n"
         "- faq: faq with 8 questions.\n- pricing: pricing and faq.\n"
@@ -760,6 +760,13 @@ def ai_site(pid: str, body: AISiteBody, request: Request, user: AuthenticatedUse
                     "sentence for a photo that fits, no text in the image).\nReturn JSON: {\"posts\": [{\"title\", \"excerpt\", \"body\", \"imagePrompt\"}]}")
     from concurrent.futures import ThreadPoolExecutor
     keys = _keys(request)
+    dash_prompt = (f"{_context(doc)}\n\nDesign the sample data for an interactive preview of this product's app dashboard, in the product's own "
+                   "terms (what a real user of THIS product would see). Return JSON: {\"title\": \"Inside <product>\", \"subtitle\" (1 sentence), "
+                   "\"kpis\": [4 x {\"label\" (<= 24 chars), \"value\" (e.g. 1,284 or 68%), \"delta\" (e.g. +12% or -4%; one may be negative)}], "
+                   "\"chartTitle\", \"donutTitle\", \"segments\": [3 x {\"label\", \"value\" (percent, they add to 100)}], "
+                   "\"assistant\": {\"title\", \"question\" (a realistic user question), \"answer\" (3 practical sentences)}, "
+                   "\"listTitle\", \"items\": [5 x {\"title\" (<= 30 chars), \"status\": \"Active\" or \"Draft\"}]}")
+
     def soft(f):
         try:
             r = f.result()
@@ -770,9 +777,11 @@ def ai_site(pid: str, body: AISiteBody, request: Request, user: AuthenticatedUse
         fh = ex.submit(lambda: _json_from(_llm(home_prompt, SITE_ARCHITECT, keys, 9000)))
         fp = ex.submit(lambda: _json_from(_llm(pages_prompt, SITE_ARCHITECT, keys, 9000)))
         fb = ex.submit(lambda: _json_from(_llm(posts_prompt, SITE_ARCHITECT, keys, 8000))) if "blog" in wanted else None
+        fd = ex.submit(lambda: _json_from(_llm(dash_prompt, SITE_ARCHITECT, keys, 3000))) if "dashboard" in wanted else None
         raw = fh.result()
         extra = soft(fp)
         extra["posts"] = soft(fb).get("posts") or [] if fb else []
+        dash = soft(fd) if fd else None
     if not isinstance(raw, dict) or not isinstance(raw.get("home"), list):
         raise HTTPException(502, "The AI reply couldn't be read. Try again.")
     if isinstance(extra, dict):
@@ -866,6 +875,8 @@ def ai_site(pid: str, body: AISiteBody, request: Request, user: AuthenticatedUse
             data = {"title": txt(d.get("title"), 120), "text": txt(d.get("text"), 300), "button": _link(d.get("button"), fix)}
         elif t == "posts":
             data = {"title": txt(d.get("title"), 120) or "Blog", "subtitle": txt(d.get("subtitle"), 300)}
+        elif t == "dashboard":
+            return None
         elif t == "footer":
             data = {"text": txt(d.get("text"), 200), "links": [_link(x, fix) for x in L("links")][:6]}
         else:
@@ -931,6 +942,26 @@ def ai_site(pid: str, body: AISiteBody, request: Request, user: AuthenticatedUse
         menu = r.get("menu") if r.get("menu") in ("header", "footer") else ("footer" if pg["path"] in ("terms", "privacy") else "header")
         out_pages.append({"id": _sid(), "title": txt(r.get("title"), 40) or pg["path"].title(), "path": pg["path"], "menu": menu,
                           "kind": "blog" if is_blog else (r.get("kind") or "page"), "sections": secs})
+    if dash is not None:
+        def lst(k, keys, n):
+            return [{kk: txt(x.get(kk), 300) for kk in keys} for x in (dash.get(k) or []) if isinstance(x, dict)][:n]
+        a = dash.get("assistant") if isinstance(dash.get("assistant"), dict) else {}
+        ddata = {"title": txt(dash.get("title"), 80) or f"Inside {name}", "subtitle": txt(dash.get("subtitle"), 240),
+                 "nav": [f["title"] for f in p1["features"]][:5],
+                 "kpis": lst("kpis", ("label", "value", "delta"), 4), "chartTitle": txt(dash.get("chartTitle"), 60) or "Last 30 days",
+                 "donutTitle": txt(dash.get("donutTitle"), 60) or "Distribution", "segments": lst("segments", ("label", "value"), 4),
+                 "assistant": {"title": txt(a.get("title"), 60) or "AI assistant", "question": txt(a.get("question"), 200), "answer": txt(a.get("answer"), 800)},
+                 "listTitle": txt(dash.get("listTitle"), 60), "items": lst("items", ("title", "status"), 6),
+                 "caption": "Interactive preview with sample data. Your own data appears once you sign up."}
+        if len(ddata["kpis"]) >= 2:
+            path = "dashboard"
+            out_pages.insert(0, {"id": _sid(), "title": "Dashboard", "path": path, "menu": "header", "kind": "dashboard",
+                                 "sections": [{"id": _sid(), "type": "dashboard", "hidden": False, "data": ddata}]})
+            paths.add(path)
+    # Menu labels stay short so the header never wraps.
+    for pg in out_pages:
+        if pg["menu"] in ("header", "footer") and len(pg["title"]) > 14:
+            pg["title"] = {"about": "About", "blog": "Blog", "contact": "Contact", "faq": "FAQ", "pricing": "Pricing", "terms": "Terms", "privacy": "Privacy"}.get(pg["path"], pg["title"][:14])
     for p, path in zip(posts_raw, post_paths):
         out_pages.append({"id": _sid(), "title": txt(p.get("title"), 120), "path": path, "menu": "none", "kind": "post",
                           "excerpt": txt(p.get("excerpt"), 300), "date": _iso()[:10], "image": "", "imagePrompt": txt(p.get("imagePrompt"), 400),
