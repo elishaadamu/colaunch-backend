@@ -57,6 +57,11 @@ def _project(pid_or_slug: str) -> Optional[Dict[str, Any]]:
     return find_project_by_slug(pid_or_slug)
 
 
+def _simulated_payments() -> bool:
+    from app.routers.projects import simulated_payments
+    return simulated_payments()
+
+
 def _pid(doc) -> str:
     return str(doc.get("_id") or doc.get("id"))
 
@@ -365,7 +370,9 @@ def readiness(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
                     f"Release {release.get('version')} live" if release else (f"Staging {staging.get('version')} will be promoted at launch" if staging else "Deploy a staging build in Phase 2 first"))
     return [
         prod,
-        item("billing", "Billing", sm == "live" and bool(price), f"Stripe {'live' if sm == 'live' else 'test mode' if sm == 'test' else 'not connected'} · price {('$' + str(price)) if price else 'not set'}", warn=(sm == "test")),
+        (item("billing", "Billing", bool(price), f"Simulated card payments (set LIVE_PAYMENTS=1 for real Stripe) · price {('$' + str(price)) if price else 'not set'}", warn=True)
+         if _simulated_payments() else
+         item("billing", "Billing", sm == "live" and bool(price), f"Stripe {'live' if sm == 'live' else 'test mode' if sm == 'test' else 'not connected'} · price {('$' + str(price)) if price else 'not set'}", warn=(sm == "test"))),
         item("onboarding", "Onboarding email", bool(ob.get("subject") and ob.get("body")), "Sent to every customer with their access link" if ob.get("subject") else "Write the welcome email"),
         item("analytics", "Analytics & activation", mode == "hosted" or product_events > 0, "Tracked automatically in the hosted app" if mode == "hosted" else (f"{product_events} events from your product this week" if product_events else "Install the tracking snippet in your product")),
         item("attribution", "Attribution", bool(kit.get("postingSchedule")), "Creator posts use ?ref= tracking links" if kit.get("postingSchedule") else "Generate the creator campaign", critical=False),
