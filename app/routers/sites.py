@@ -285,3 +285,243 @@ def publish_on_launch(doc: Dict[str, Any], decision: str) -> None:
         _publish(doc, notify=not site.get("notifiedAt"))
     except Exception as e:
         logger.warning(f"[Sites] publish on launch failed: {e}")
+
+
+# ── AI: write sections / a whole page, custom code sections, logos ───────────────────────────────
+
+class AISectionBody(BaseModel):
+    type: str
+    data: Dict[str, Any] = {}
+    instruction: Optional[str] = None
+
+
+class AIPageBody(BaseModel):
+    sections: list = []
+    instruction: Optional[str] = None
+
+
+class AICodeBody(BaseModel):
+    prompt: str
+    html: Optional[str] = None
+    css: Optional[str] = None
+    theme: Dict[str, Any] = {}
+
+
+class AILogoBody(BaseModel):
+    style: str = "svg"   # svg | image
+    brief: Optional[str] = None
+    accent: Optional[str] = None
+
+
+def _keys(request: Request) -> Dict[str, str]:
+    h = request.headers
+    return {"geminiKey": h.get("X-Gemini-Key") or "", "openaiKey": h.get("X-OpenAI-Key") or "", "anthropicKey": h.get("X-Anthropic-Key") or ""}
+
+
+def _context(doc: Dict[str, Any]) -> str:
+    concepts = doc.get("productConcepts") or doc.get("product_concepts") or []
+    c = doc.get("selectedConcept") or doc.get("selected_concept") or next((x for x in concepts if isinstance(x, dict) and x.get("selected")), None) or (concepts[0] if concepts and isinstance(concepts[0], dict) else {}) or {}
+    feats = c.get("keyFeatures") or doc.get("keyFeatures") or []
+    feats = [f if isinstance(f, str) else (f.get("title") or f.get("name") or "") for f in feats][:8]
+    parts = {
+        "Product": c.get("name") or doc.get("productName") or doc.get("product_name"),
+        "Tagline": c.get("tagline") or doc.get("productTagline"),
+        "Problem it solves": c.get("problem") or doc.get("problem"),
+        "Customer": c.get("customer") or doc.get("targetAudience"),
+        "Pricing": c.get("pricing") or doc.get("pricing"),
+        "Key features": ", ".join([f for f in feats if f]),
+        "Creator": doc.get("creatorName") or doc.get("creator_name"),
+        "Creator niche": doc.get("niche"),
+    }
+    return "\n".join(f"{k}: {v}" for k, v in parts.items() if v)
+
+
+def _json_from(raw: str):
+    s = (raw or "").strip()
+    s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s, flags=re.I | re.M).strip()
+    for opener, closer in (("{", "}"), ("[", "]")):
+        a, b = s.find(opener), s.rfind(closer)
+        if a != -1 and b > a:
+            try:
+                return json.loads(s[a:b + 1])
+            except Exception:
+                continue
+    raise HTTPException(502, "The AI reply couldn't be read. Try again.")
+
+
+def _llm(prompt: str, system: str, keys: Dict[str, str], max_tokens: int = 2000) -> str:
+    from app.services.llm import call_llm
+    try:
+        out = call_llm(prompt, max_tokens=max_tokens, system_prompt=system, api_keys=keys)
+    except Exception as e:
+        logger.warning(f"[Sites AI] llm failed: {e}")
+        raise HTTPException(502, "The AI is unavailable right now. Try again in a moment.")
+    if not out or out.lower().startswith(("error", "all ai providers failed", "no ai provider")):
+        raise HTTPException(502, "The AI is unavailable right now. Check the AI keys in settings.")
+    return out
+
+
+WRITER = ("You write website copy for small product launches. Plain, specific, confident; no hype words "
+          "(revolutionary, game-changing, unlock, seamless, elevate, supercharge), no emojis, no exclamation marks. "
+          "Short sentences. Write for the product's real customer. Reply with JSON only.")
+
+
+def _clip(v, n=600):
+    return v[:n] if isinstance(v, str) else v
+
+
+@router.post("/{pid}/ai/section")
+def ai_section(pid: str, body: AISectionBody, request: Request, user: AuthenticatedUser = Depends(require_project_owner)):
+    doc = _resolve(pid)
+    if body.type in ("custom",):
+        raise HTTPException(400, "Use the code generator for custom sections.")
+    prompt = (f"{_context(doc)}\n\nRewrite the content of one '{body.type}' section of the product's website.\n"
+              f"Current content (JSON):\n{json.dumps(body.data, default=str)[:4000]}\n\n"
+              + (f"Instruction from the creator: {body.instruction.strip()[:500]}\n\n" if (body.instruction or '').strip() else "")
+              + "Return a JSON object with exactly the same keys and shape as the current content (same list item keys, "
+                "links stay objects with label and href, keep existing hrefs and image URLs unless asked). Fill empty text fields. "
+                "Lists: 3 to 6 items unless the instruction says otherwise.")
+    data = _json_from(_llm(prompt, WRITER, _keys(request), 1800))
+    if not isinstance(data, dict):
+        raise HTTPException(502, "The AI reply couldn't be read. Try again.")
+    # keep only known keys, keep URLs the AI wasn't asked to change
+    out = {k: data.get(k, v) for k, v in body.data.items()} if body.data else data
+    for k in ("image",):
+        if k in body.data and body.data.get(k) and not (body.instruction or "").lower().count("image"):
+            out[k] = body.data[k]
+    return {"data": out}
+
+
+@router.post("/{pid}/ai/page")
+def ai_page(pid: str, body: AIPageBody, request: Request, user: AuthenticatedUser = Depends(require_project_owner)):
+    doc = _resolve(pid)
+    secs = [s for s in body.sections if isinstance(s, dict) and s.get("id") and s.get("type") not in ("custom",)][:16]
+    if not secs:
+        raise HTTPException(400, "Add some sections first.")
+    slim = [{"id": s["id"], "type": s["type"], "data": s.get("data") or {}} for s in secs]
+    prompt = (f"{_context(doc)}\n\nRewrite all the copy on the product's website so it reads as one clear story.\n"
+              f"Sections (JSON):\n{json.dumps(slim, default=str)[:12000]}\n\n"
+              + (f"Instruction from the creator: {body.instruction.strip()[:500]}\n\n" if (body.instruction or '').strip() else "")
+              + "Return a JSON array of {\"id\", \"data\"} with the same ids. Each data keeps the same keys and shape as before "
+                "(links stay {label, href}; keep hrefs and image URLs as they are). Fill empty text fields.")
+    arr = _json_from(_llm(prompt, WRITER, _keys(request), 6000))
+    if isinstance(arr, dict):
+        arr = arr.get("sections") or []
+    byid = {s["id"]: s for s in slim}
+    out = {}
+    for item in arr if isinstance(arr, list) else []:
+        if not isinstance(item, dict) or item.get("id") not in byid or not isinstance(item.get("data"), dict):
+            continue
+        old = byid[item["id"]]["data"]
+        new = {k: item["data"].get(k, v) for k, v in old.items()} if old else item["data"]
+        if old.get("image"):
+            new["image"] = old["image"]
+        out[item["id"]] = new
+    if not out:
+        raise HTTPException(502, "The AI reply couldn't be read. Try again.")
+    return {"sections": out}
+
+
+CODER = ("You build one self-contained section of a marketing web page as plain HTML and CSS. No JavaScript, no <script>, "
+         "no external CSS or fonts, no forms that post anywhere. Images only from https URLs the user gives, otherwise use CSS shapes "
+         "or gradients. Scope every CSS rule under the class .cx. Responsive (works at 360px wide). Square corners. "
+         "Reply with JSON only: {\"html\": \"...\", \"css\": \"...\", \"height\": <estimated px height at desktop>}.")
+
+
+@router.post("/{pid}/ai/code")
+def ai_code(pid: str, body: AICodeBody, request: Request, user: AuthenticatedUser = Depends(require_project_owner)):
+    doc = _resolve(pid)
+    if len((body.prompt or "").strip()) < 4:
+        raise HTTPException(400, "Describe the section you want.")
+    t = body.theme or {}
+    prompt = (f"{_context(doc)}\n\nPage theme: accent {t.get('accent') or '#c81e3c'}, {'dark' if t.get('mode') != 'light' else 'light'} background "
+              f"(use var(--acc), var(--fg), var(--bg), var(--mut), var(--line), var(--head) and var(--body) for colours and fonts; they are defined).\n\n"
+              f"Request: {body.prompt.strip()[:1200]}\n"
+              + (f"\nCurrent HTML to change:\n{(body.html or '')[:6000]}\nCurrent CSS:\n{(body.css or '')[:4000]}\n" if body.html else "")
+              + "\nWrap everything in <div class=\"cx\">…</div>.")
+    data = _json_from(_llm(prompt, CODER, _keys(request), 5000))
+    html = str(data.get("html") or "")
+    css = str(data.get("css") or "")
+    html = re.sub(r"<script[\s\S]*?</script>", "", html, flags=re.I)
+    html = re.sub(r"\son\w+\s*=\s*(\"[^\"]*\"|'[^']*')", "", html, flags=re.I)
+    if not html.strip():
+        raise HTTPException(502, "The AI returned an empty section. Try describing it differently.")
+    try:
+        height = max(120, min(int(data.get("height") or 480), 2400))
+    except Exception:
+        height = 480
+    return {"html": html[:40000], "css": css[:20000], "height": height}
+
+
+LOGO_SVG = ("You design simple, distinctive logos as SVG. Each logo: viewBox=\"0 0 240 64\", a compact geometric mark on the left "
+            "and the product name as text on the right (font-family: Inter, Helvetica, Arial, sans-serif; font-weight 700). "
+            "Flat colours only, no gradients, no filters, no images, no scripts, no external references. "
+            "Reply with JSON only: {\"logos\": [\"<svg …>…</svg>\", …]} with 3 clearly different concepts.")
+
+
+def _clean_svg(svg: str) -> Optional[str]:
+    s = (svg or "").strip()
+    if not s.startswith("<svg") or "</svg>" not in s:
+        return None
+    if re.search(r"<script|<foreignObject|on\w+\s*=|javascript:|xlink:href=\"http|href=\"http|<image", s, flags=re.I):
+        return None
+    if "xmlns=" not in s[:200]:
+        s = s.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"', 1)
+    return s[:20000]
+
+
+def _upload_logo(data: bytes, pid: str, ext: str) -> str:
+    from app.integrations.cloudinary_service import upload_media_to_cloudinary
+    import secrets as _s
+    res = upload_media_to_cloudinary(file_data=data, public_id=f"logo_{pid}_{_s.token_hex(4)}", folder="colaunch_sites", resource_type="image", tags=["site_logo"])
+    url = res.get("secure_url") if res.get("success") else None
+    if not url or not str(url).startswith("http"):
+        raise HTTPException(503, "Couldn't store the logo. Try again shortly.")
+    return url
+
+
+@router.post("/{pid}/ai/logo")
+def ai_logo(pid: str, body: AILogoBody, request: Request, user: AuthenticatedUser = Depends(require_project_owner)):
+    doc = _resolve(pid)
+    real = _pid(doc)
+    name = doc.get("productName") or doc.get("product_name") or "Product"
+    accent = body.accent if re.match(r"^#[0-9a-fA-F]{6}$", body.accent or "") else "#c81e3c"
+    brief = (body.brief or "").strip()[:400]
+    if body.style == "image":
+        import base64
+        from app.services.campaign_media import _get_openai_client
+        try:
+            client = _get_openai_client(request.headers.get("X-OpenAI-Key") or None)
+        except Exception:
+            raise HTTPException(503, "Image logos need an OpenAI key. Use the 'Vector' style instead.")
+        prompt = (f"A clean, modern logo mark for a product called \"{name}\". {brief} "
+                  f"Flat vector style, single main colour {accent} with one neutral, simple geometric symbol, centred on a plain white background, "
+                  "no text, no mockup, no shadows, high contrast, works small as an app icon.")
+        urls = []
+        for model in ("gpt-image-1", "dall-e-3"):
+            try:
+                res = client.images.generate(model=model, prompt=prompt, n=1, size="1024x1024")
+                d = res.data[0] if res.data else None
+                if d is not None and getattr(d, "b64_json", None):
+                    urls.append(_upload_logo(base64.b64decode(d.b64_json), real, "png"))
+                elif d is not None and getattr(d, "url", None):
+                    import httpx
+                    urls.append(_upload_logo(httpx.get(d.url, timeout=30).content, real, "png"))
+                if urls:
+                    break
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"[Sites AI] logo image {model} failed: {e}")
+        if not urls:
+            raise HTTPException(502, "The image model couldn't make a logo right now. Try the 'Vector' style.")
+        return {"logos": urls}
+
+    prompt = (f"{_context(doc)}\n\nProduct name to show: {name}\nMain colour: {accent}\n"
+              + (f"Creator's direction: {brief}\n" if brief else "")
+              + "Make 3 logo concepts.")
+    data = _json_from(_llm(prompt, LOGO_SVG, _keys(request), 4000))
+    svgs = [x for x in (_clean_svg(s) for s in (data.get("logos") if isinstance(data, dict) else data) or []) if x][:3]
+    if not svgs:
+        raise HTTPException(502, "The AI didn't return usable logos. Try again.")
+    return {"logos": [_upload_logo(s.encode("utf-8"), real, "svg") for s in svgs]}
