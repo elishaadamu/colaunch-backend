@@ -760,12 +760,17 @@ def ai_site(pid: str, body: AISiteBody, request: Request, user: AuthenticatedUse
                     "sentence for a photo that fits, no text in the image).\nReturn JSON: {\"posts\": [{\"title\", \"excerpt\", \"body\", \"imagePrompt\"}]}")
     from concurrent.futures import ThreadPoolExecutor
     keys = _keys(request)
-    dash_prompt = (f"{_context(doc)}\n\nDesign the sample data for an interactive preview of this product's app dashboard, in the product's own "
-                   "terms (what a real user of THIS product would see). Return JSON: {\"title\": \"Inside <product>\", \"subtitle\" (1 sentence), "
-                   "\"kpis\": [4 x {\"label\" (<= 24 chars), \"value\" (e.g. 1,284 or 68%), \"delta\" (e.g. +12% or -4%; one may be negative)}], "
-                   "\"chartTitle\", \"donutTitle\", \"segments\": [3 x {\"label\", \"value\" (percent, they add to 100)}], "
-                   "\"assistant\": {\"title\", \"question\" (a realistic user question), \"answer\" (3 practical sentences)}, "
-                   "\"listTitle\", \"items\": [5 x {\"title\" (<= 30 chars), \"status\": \"Active\" or \"Draft\"}]}")
+    feat_lines = "\n".join(f"- {f['title']}: {f['text']}" for f in p1["features"])
+    dash_prompt = (f"{_context(doc)}\n\nPhase 1 features (use these exact titles):\n{feat_lines}\n\n"
+                   "Design the sample data for the product's app, as a real user of THIS product would see it after a few weeks. "
+                   "Everything must be specific to the product, its customer and these features. Return JSON: {"
+                   "\"title\" (overview heading, e.g. a short welcome), "
+                   "\"kpis\": [4 x {\"label\" (<= 24 chars), \"value\" (e.g. 24 or 68%), \"delta\" (e.g. +12% or -4%)}], "
+                   "\"chartTitle\", \"donutTitle\", \"segments\": [3 x {\"label\", \"value\" (percent, adding to 100)}], "
+                   "\"assistant\": {\"title\", \"question\" (a realistic question from the customer), \"answer\" (3 practical sentences)}, "
+                   "\"listTitle\", \"items\": [5 x {\"title\" (<= 30 chars), \"status\": \"Active\" or \"Draft\"}], "
+                   "\"views\": [one per feature, in order: {\"feature\" (exact title), \"kpis\": [3 x {label, value, delta}], \"chartTitle\", "
+                   "\"listTitle\", \"items\": [4 x {title, status}], \"assistant\": {\"title\", \"question\", \"answer\" (2 to 3 sentences)}}]}")
 
     def soft(f):
         try:
@@ -777,7 +782,7 @@ def ai_site(pid: str, body: AISiteBody, request: Request, user: AuthenticatedUse
         fh = ex.submit(lambda: _json_from(_llm(home_prompt, SITE_ARCHITECT, keys, 9000)))
         fp = ex.submit(lambda: _json_from(_llm(pages_prompt, SITE_ARCHITECT, keys, 9000)))
         fb = ex.submit(lambda: _json_from(_llm(posts_prompt, SITE_ARCHITECT, keys, 8000))) if "blog" in wanted else None
-        fd = ex.submit(lambda: _json_from(_llm(dash_prompt, SITE_ARCHITECT, keys, 3000))) if "dashboard" in wanted else None
+        fd = ex.submit(lambda: _json_from(_llm(dash_prompt, SITE_ARCHITECT, keys, 6000))) if "dashboard" in wanted else None
         raw = fh.result()
         extra = soft(fp)
         extra["posts"] = soft(fb).get("posts") or [] if fb else []
@@ -946,13 +951,34 @@ def ai_site(pid: str, body: AISiteBody, request: Request, user: AuthenticatedUse
         def lst(k, keys, n):
             return [{kk: txt(x.get(kk), 300) for kk in keys} for x in (dash.get(k) or []) if isinstance(x, dict)][:n]
         a = dash.get("assistant") if isinstance(dash.get("assistant"), dict) else {}
-        ddata = {"title": txt(dash.get("title"), 80) or f"Inside {name}", "subtitle": txt(dash.get("subtitle"), 240),
-                 "nav": [f["title"] for f in p1["features"]][:5],
-                 "kpis": lst("kpis", ("label", "value", "delta"), 4), "chartTitle": txt(dash.get("chartTitle"), 60) or "Last 30 days",
-                 "donutTitle": txt(dash.get("donutTitle"), 60) or "Distribution", "segments": lst("segments", ("label", "value"), 4),
-                 "assistant": {"title": txt(a.get("title"), 60) or "AI assistant", "question": txt(a.get("question"), 200), "answer": txt(a.get("answer"), 800)},
-                 "listTitle": txt(dash.get("listTitle"), 60), "items": lst("items", ("title", "status"), 6),
-                 "caption": "Interactive preview with sample data. Your own data appears once you sign up."}
+        def kp(arr, n):
+            return [{kk: txt(x.get(kk), 40) for kk in ("label", "value", "delta")} for x in (arr or []) if isinstance(x, dict)][:n]
+        def it(arr, n):
+            return [{kk: txt(x.get(kk), 60) for kk in ("title", "status")} for x in (arr or []) if isinstance(x, dict)][:n]
+        def asst(x):
+            x = x if isinstance(x, dict) else {}
+            return {"title": txt(x.get("title"), 60), "question": txt(x.get("question"), 200), "answer": txt(x.get("answer"), 800)}
+        views = {}
+        titles = {f["title"].lower(): f["title"] for f in p1["features"]}
+        raw_views = dash.get("views") or []
+        if isinstance(raw_views, dict):
+            raw_views = [dict(v, feature=k) for k, v in raw_views.items() if isinstance(v, dict)]
+        order = [f["title"] for f in p1["features"]]
+        for n, vw in enumerate(raw_views):
+            if not isinstance(vw, dict):
+                continue
+            key = titles.get(str(vw.get("feature") or vw.get("title") or "").lower().strip()) or (order[n] if n < len(order) else None)
+            if key and key not in views:
+                views[key] = {"kpis": kp(vw.get("kpis"), 3), "chartTitle": txt(vw.get("chartTitle"), 60),
+                                                            "listTitle": txt(vw.get("listTitle"), 60), "items": it(vw.get("items"), 5), "assistant": asst(vw.get("assistant"))}
+        a = asst(dash.get("assistant"))
+        ddata = {"title": txt(dash.get("title"), 80) or "Welcome back", "greeting": "Overview",
+                 "features": p1["features"], "views": views,
+                 "customer": p1["customer"], "pricing": p1["pricing"], "creator": p1["creator"], "prompt": p1["tagline"],
+                 "kpis": kp(dash.get("kpis"), 4), "chartTitle": txt(dash.get("chartTitle"), 60) or "Last 30 days",
+                 "donutTitle": txt(dash.get("donutTitle"), 60) or "Breakdown", "segments": lst("segments", ("label", "value"), 4),
+                 "assistant": {**a, "title": a["title"] or f"{name} assistant"},
+                 "listTitle": txt(dash.get("listTitle"), 60), "items": it(dash.get("items"), 6)}
         if len(ddata["kpis"]) >= 2:
             path = "dashboard"
             out_pages.insert(0, {"id": _sid(), "title": "Dashboard", "path": path, "menu": "header", "kind": "dashboard",
