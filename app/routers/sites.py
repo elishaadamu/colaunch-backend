@@ -379,6 +379,45 @@ def _context(doc: Dict[str, Any]) -> str:
     return "\n".join(f"{k}: {v}" for k, v in parts.items() if v)
 
 
+ARCHETYPE_LABELS = {"workflow": "Workflow Operating System", "copilot": "AI Intelligence Copilot", "vault": "Member Vault & Private Cohort"}
+
+
+def _concept(doc: Dict[str, Any]) -> Dict[str, Any]:
+    concepts = doc.get("productConcepts") or doc.get("product_concepts") or []
+    return (doc.get("selectedConcept") or doc.get("selected_concept")
+            or next((x for x in concepts if isinstance(x, dict) and x.get("selected")), None)
+            or (concepts[0] if concepts and isinstance(concepts[0], dict) else {}) or {})
+
+
+def _phase1(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """The approved Phase 1 concept, as the website must show it (same as the concept landing page and mockup)."""
+    c = _concept(doc)
+    feats = []
+    for f in (c.get("keyFeatures") or doc.get("keyFeatures") or [])[:6]:
+        if isinstance(f, dict):
+            t, d = f.get("title") or f.get("name") or "", f.get("description") or f.get("text") or ""
+        else:
+            t, _, d = str(f).partition(":")
+        if t.strip():
+            feats.append({"title": t.strip()[:80], "text": d.strip()[:300]})
+    color = c.get("landingBrandColor") or c.get("brandColor") or doc.get("brandColor") or "#10B981"
+    if not re.match(r"^#[0-9a-fA-F]{6}$", str(color)):
+        color = "#10B981"
+    idx = c.get("landingIndex")
+    arche = c.get("archetype") if c.get("archetype") in ARCHETYPE_LABELS else (["workflow", "copilot", "vault"][idx % 3] if isinstance(idx, int) else "workflow")
+    return {
+        "name": c.get("name") or doc.get("productName") or doc.get("product_name") or "Product",
+        "tagline": (c.get("tagline") or doc.get("productTagline") or "").strip(),
+        "problem": (c.get("problem") or doc.get("problem") or "").strip(),
+        "customer": (c.get("customer") or doc.get("targetAudience") or "").strip(),
+        "pricing": (c.get("pricing") or doc.get("pricing") or "").strip(),
+        "features": feats, "color": color, "archetype": arche, "label": ARCHETYPE_LABELS[arche],
+        "landingIndex": idx if isinstance(idx, int) else None,
+        "creator": doc.get("creatorName") or doc.get("creator_name") or "",
+        "avatar": doc.get("creatorAvatar") or (doc.get("creatorProfile") or {}).get("avatar_url") or "",
+    }
+
+
 def _json_from(raw: str):
     s = (raw or "").strip()
     s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s, flags=re.I | re.M).strip()
@@ -542,7 +581,7 @@ def ai_logo(pid: str, body: AILogoBody, request: Request, user: AuthenticatedUse
                   f"Flat vector style, single main colour {accent} with one neutral, simple geometric symbol, centred on a plain white background, "
                   "no text, no mockup, no shadows, high contrast, works small as an app icon.")
         urls = []
-        for model in ("gpt-image-1", "dall-e-3"):
+        for model in IMAGE_MODELS:
             try:
                 res = client.images.generate(model=model, prompt=prompt, n=1, size="1024x1024")
                 d = res.data[0] if res.data else None
@@ -569,6 +608,358 @@ def ai_logo(pid: str, body: AILogoBody, request: Request, user: AuthenticatedUse
     if not svgs:
         raise HTTPException(502, "The AI didn't return usable logos. Try again.")
     return {"logos": [_upload_logo(s.encode("utf-8"), real, "svg") for s in svgs]}
+
+
+# ── AI: build the whole site (theme, home sections, extra pages, blog) ────────────────────────────
+
+class AISiteBody(BaseModel):
+    brief: Optional[str] = None
+    pages: list = []          # extra page kinds the creator wants, e.g. ["about", "blog", "contact"]
+
+
+class AIImageBody(BaseModel):
+    prompt: str
+    aspect: str = "wide"      # wide | square | tall
+
+
+SITE_ARCHITECT = (
+    "You are a senior web designer and copywriter building a complete, polished marketing website for one product. "
+    "Plain, specific, confident copy; no hype words (revolutionary, game-changing, unlock, seamless, elevate, supercharge), "
+    "no emojis, no exclamation marks. Never invent customer quotes, reviews, user counts, awards or press logos. "
+    "Do not design sign-in, log-in or account screens: this is a marketing site, the product lives elsewhere. "
+    "Reply with JSON only.")
+
+_SECTION_SHAPES = """Section types and their data (use these keys exactly):
+- nav: {brand, links:[{label, href}], cta:{label, href}}
+- hero: {eyebrow, title, subtitle, cta:{label, href}, secondary:{label, href}, layout:"split"|"center"|"cover", imagePrompt}
+- features: {title, subtitle, items:[{title, text}]}   (3 to 6 items)
+- text: {title, body, imagePrompt}   (body may use blank lines between paragraphs; imagePrompt optional)
+- gallery: {title, images:[{caption, imagePrompt}]}   (2 to 4 images)
+- steps: {title, subtitle, items:[{title, text}]}   (how it works, 3 to 4 steps)
+- stats: {title, items:[{value, label}]}   (only facts from the product brief, e.g. price, time to set up; never invented usage numbers)
+- pricing: {title, subtitle, plans:[{name, price, period, features (one per line), cta:{label, href}, highlight}]}
+- faq: {title, items:[{q, a}]}   (4 to 6)
+- signup: {title, text, button, success}
+- cta: {title, text, button:{label, href}}
+- posts: {title, subtitle}   (blog index; posts are listed automatically)
+- footer: {text, links:[{label, href}]}"""
+
+
+IMAGE_MODELS = ("gpt-image-2", "chatgpt-image-latest", "gpt-image-1.5", "gpt-image-1-mini", "gpt-image-1")
+
+
+def _image_for(prompt: str, aspect: str, real: str, key: Optional[str]) -> str:
+    import base64
+    from app.services.campaign_media import _get_openai_client
+    try:
+        client = _get_openai_client(key or None)
+    except Exception:
+        raise HTTPException(503, "Image generation needs an OpenAI key in settings.")
+    size = {"wide": "1536x1024", "tall": "1024x1536"}.get(aspect, "1024x1024")
+    full = (f"{prompt.strip()[:900]}. Editorial, high-end product website photography or clean 3D illustration, "
+            "natural light, no text, no words, no logos, no watermarks, no UI screenshots with text.")
+    last = None
+    for model, sz in [(m, size) for m in IMAGE_MODELS] + [("gpt-image-1.5", None)]:
+        try:
+            extra = {"size": sz} if sz else {}
+            if model.startswith("gpt-image"):
+                extra["quality"] = "medium"
+            res = client.images.generate(model=model, prompt=full, n=1, **extra)
+            d = res.data[0] if res.data else None
+            if d is not None and getattr(d, "b64_json", None):
+                data = base64.b64decode(d.b64_json)
+            elif d is not None and getattr(d, "url", None):
+                import httpx
+                data = httpx.get(d.url, timeout=60).content
+            else:
+                continue
+            from app.integrations.cloudinary_service import upload_media_to_cloudinary
+            import secrets as _s
+            up = upload_media_to_cloudinary(file_data=data, public_id=f"site_{real}_{_s.token_hex(5)}", folder="colaunch_sites", resource_type="image", tags=["site_image"])
+            url = up.get("secure_url") if up.get("success") else None
+            if url and str(url).startswith("http"):
+                return url
+            raise HTTPException(503, "Couldn't store the image. Try again shortly.")
+        except HTTPException:
+            raise
+        except Exception as e:
+            last = e
+            logger.warning(f"[Sites AI] image {model} failed: {e}")
+    raise HTTPException(502, "The image model couldn't make that image right now. Try again.")
+
+
+@router.post("/{pid}/ai/image")
+def ai_image(pid: str, body: AIImageBody, request: Request, user: AuthenticatedUser = Depends(require_project_owner)):
+    doc = _resolve(pid)
+    if len((body.prompt or "").strip()) < 4:
+        raise HTTPException(400, "Describe the image you want.")
+    name = doc.get("productName") or doc.get("product_name") or ""
+    url = _image_for(f"For the website of {name}: {body.prompt}", body.aspect, _pid(doc), request.headers.get("X-OpenAI-Key"))
+    return {"url": url}
+
+
+def _sid() -> str:
+    import secrets as _s
+    return _s.token_hex(4)
+
+
+_ALLOWED = {"nav", "hero", "features", "text", "gallery", "steps", "stats", "pricing", "faq", "signup", "cta", "posts", "footer"}
+
+
+def _link(v, fix) -> Dict[str, str]:
+    if not isinstance(v, dict):
+        return {"label": "", "href": ""}
+    return {"label": str(v.get("label") or "")[:60], "href": fix(str(v.get("href") or ""))}
+
+
+@router.post("/{pid}/ai/site")
+def ai_site(pid: str, body: AISiteBody, request: Request, user: AuthenticatedUser = Depends(require_project_owner)):
+    """Designs a full site: theme picked for the product, a rich home page, extra pages and a blog with posts.
+    Every link is checked so menus and buttons go somewhere real (a section, a page, or the pre-order page)."""
+    doc = _resolve(pid)
+    slug = doc.get("slug") or _pid(doc)
+    buy = f"/preorder/{slug}"
+    wanted = [p for p in (body.pages or []) if p in ("about", "blog", "contact", "faq", "pricing", "terms", "privacy")] or ["about", "blog", "contact", "terms", "privacy"]
+    p1 = _phase1(doc)
+    look = (f"dark interface aesthetic: deep near-black background (#08090c) with soft {p1['color']} accent light, calm, premium, "
+            "modern software product for real people")
+    ctx = (f"{_context(doc)}\n\n"
+           "This website must match the product approved in Phase 1 exactly: same name, headline (the tagline), problem, "
+           f"customer, features and prices. Brand colour {p1['color']} on a dark theme. Never rename the product or its features, "
+           "never change prices. Image prompts describe scenes in this style: " + look + ".\n\n"
+           + (f"What the creator wants: {body.brief.strip()[:1200]}\n\n" if (body.brief or "").strip() else "")
+           + f"{_SECTION_SHAPES}\n\n"
+           "Rules for links (href): a home section is \"#<anchor>\"; another page is \"/<page path>\"; buying or pre-ordering is "
+           f"\"{buy}\"; joining the list is \"#signup\". Use nothing else. "
+           f"The site's pages are: home, {', '.join(wanted)}.\n"
+           "Never put text inside images.\n\n")
+    home_prompt = ctx + (
+        "Design the HOME page and the look of the site.\n"
+        "The hero shows the Phase 1 product mockup, so it needs no imagePrompt.\n"
+        "The home page must have, in this order: nav; hero; a text section about the problem (with imagePrompt); "
+        "features (exactly the Phase 1 features, same titles, each text 2 sentences); steps (3 or 4); a text section showing the product in use (with imagePrompt); "
+        "gallery (3 images with imagePrompt and caption); pricing; faq (5 or 6); "
+        "signup; cta; footer. Pricing uses only the price(s) in the brief above: one plan unless the brief lists more; never invent "
+        "tiers or prices. Step titles have no numbers (the page numbers them). Every section has real, specific copy (no placeholders). Section text fields are 1 to 3 sentences, "
+        "text section bodies 2 short paragraphs.\n"
+        "Return JSON: {\"theme\": {\"accent\", \"mode\", \"font\"}, \"settings\": {\"title\" (<= 60 chars), \"description\" (<= 155 chars)}, "
+        "\"home\": [{\"type\", \"anchor\", \"data\"}]}. Nav links point to 3 or 4 key home sections (#anchors); the nav cta goes to the pre-order page.")
+    pages_prompt = ctx + (
+        "Write the OTHER pages of the site (not the home page).\n"
+        f"Pages: {', '.join(wanted)}. Each page has 2 to 4 sections from the list (no nav or footer) with real, specific copy:\n"
+        "- about: a text section with the story (3 paragraphs, imagePrompt), features as 'what we believe' (3 items), cta.\n"
+        "- contact: text with how to reach the team and response time, faq (3 support questions), signup.\n"
+        "- faq: faq with 8 questions.\n- pricing: pricing and faq.\n"
+        "- terms / privacy: one text section with a plain-language draft (6 to 8 short headed paragraphs), ending with a note to have it checked.\n"
+        "- blog: a posts section (title and subtitle) and a signup section.\n"
+        "Menu: about, blog, contact, faq, pricing go in the header; terms and privacy in the footer.\n"
+        + "Return JSON: {\"pages\": [{\"kind\", \"title\", \"path\", \"menu\", \"sections\": [{\"type\", \"data\"}]}]}")
+    posts_prompt = (f"{_context(doc)}\n\nWrite 3 blog posts for this product's website that are genuinely useful to its customers: practical "
+                    "advice about the problem the product solves. Mention the product naturally at most once per post. Each post: title, "
+                    "excerpt (1 sentence), body (5 to 7 paragraphs separated by blank lines, no headings, no markdown), imagePrompt (one vivid "
+                    "sentence for a photo that fits, no text in the image).\nReturn JSON: {\"posts\": [{\"title\", \"excerpt\", \"body\", \"imagePrompt\"}]}")
+    from concurrent.futures import ThreadPoolExecutor
+    keys = _keys(request)
+    def soft(f):
+        try:
+            r = f.result()
+            return r if isinstance(r, dict) else {}
+        except HTTPException:
+            return {}
+    with ThreadPoolExecutor(3) as ex:
+        fh = ex.submit(lambda: _json_from(_llm(home_prompt, SITE_ARCHITECT, keys, 9000)))
+        fp = ex.submit(lambda: _json_from(_llm(pages_prompt, SITE_ARCHITECT, keys, 9000)))
+        fb = ex.submit(lambda: _json_from(_llm(posts_prompt, SITE_ARCHITECT, keys, 8000))) if "blog" in wanted else None
+        raw = fh.result()
+        extra = soft(fp)
+        extra["posts"] = soft(fb).get("posts") or [] if fb else []
+    if not isinstance(raw, dict) or not isinstance(raw.get("home"), list):
+        raise HTTPException(502, "The AI reply couldn't be read. Try again.")
+    if isinstance(extra, dict):
+        raw["pages"] = extra.get("pages") or []
+        raw["posts"] = extra.get("posts") or []
+
+    # Pages first, so links can be checked against real paths.
+    pages, paths = [], set()
+    for pg in (raw.get("pages") or [])[:8]:
+        if not isinstance(pg, dict):
+            continue
+        if _slugify(pg.get("kind") or pg.get("path") or "") not in wanted and _slugify(pg.get("path") or "") not in wanted:
+            continue
+        path = _slugify(pg.get("path") or pg.get("title") or pg.get("kind") or "page")[:40] or "page"
+        while path in paths:
+            path += "-2"
+        paths.add(path)
+        pages.append({"_raw": pg, "path": path})
+    if "blog" in wanted and not any(pg["_raw"].get("kind") == "blog" or pg["path"] == "blog" for pg in pages):
+        paths.add("blog")
+        pages.append({"_raw": {"kind": "blog", "title": "Blog", "menu": "header", "sections": [
+            {"type": "posts", "data": {"title": "Blog", "subtitle": "Practical notes for getting more out of your day."}},
+            {"type": "signup", "data": {"title": "Get new posts by email", "text": "One email when a new post is out.", "button": "Subscribe", "success": "You're subscribed."}}]}, "path": "blog"})
+    posts_raw = [p for p in (raw.get("posts") or []) if isinstance(p, dict) and p.get("title")][:6] if any(
+        (pg["_raw"].get("kind") == "blog" or pg["path"] == "blog") for pg in pages) else []
+    post_paths = []
+    for p in posts_raw:
+        path = ("blog-" + _slugify(p["title"]))[:48]
+        while path in paths:
+            path += "-2"
+        paths.add(path)
+        post_paths.append(path)
+
+    home_raw = [s for s in raw["home"] if isinstance(s, dict) and s.get("type") in _ALLOWED][:14]
+    anchors = set()
+    for s in home_raw:
+        a = _slugify(str(s.get("anchor") or s.get("type")))[:30] or s["type"]
+        while a in anchors:
+            a += "-2"
+        anchors.add(a)
+        s["_anchor"] = a
+    has_signup = any(s["type"] == "signup" for s in home_raw)
+
+    def fix(h: str) -> str:
+        h = (h or "").strip()
+        if h.startswith("#"):
+            a = _slugify(h[1:])
+            return f"#{a}" if a in anchors else ("#signup" if a == "signup" and has_signup else buy)
+        if h.startswith("/preorder") or h == buy:
+            return buy
+        if re.match(r"^https?://", h) or h.startswith("mailto:"):
+            return h[:300]
+        p = _slugify(h.lstrip("/").split("#")[0].split("?")[0])
+        if p in paths:
+            return f"/{p}"
+        if p in anchors:
+            return f"#{p}"
+        return buy
+
+    def txt(v, n=1200):
+        return str(v or "")[:n] if not isinstance(v, (dict, list)) else ""
+
+    def clean(sec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        t = sec.get("type")
+        d = sec.get("data") if isinstance(sec.get("data"), dict) else {}
+        L = lambda k: [x for x in (d.get(k) or []) if isinstance(x, dict)]
+        if t == "nav":
+            data = {"brand": txt(d.get("brand"), 60), "links": [_link(x, fix) for x in L("links")][:6], "cta": _link(d.get("cta"), fix)}
+        elif t == "hero":
+            lay = d.get("layout") if d.get("layout") in ("split", "center", "cover") else "split"
+            data = {"eyebrow": txt(d.get("eyebrow"), 80), "title": txt(d.get("title"), 160), "subtitle": txt(d.get("subtitle"), 400),
+                    "cta": _link(d.get("cta"), fix), "secondary": _link(d.get("secondary"), fix), "layout": lay, "image": "", "imagePrompt": txt(d.get("imagePrompt"), 400)}
+        elif t in ("features", "steps"):
+            data = {"title": txt(d.get("title"), 120), "subtitle": txt(d.get("subtitle"), 400), "items": [{"title": txt(x.get("title"), 80), "text": txt(x.get("text"), 400)} for x in L("items")][:6]}
+        elif t == "stats":
+            data = {"title": txt(d.get("title"), 120), "items": [{"value": txt(x.get("value"), 20), "label": txt(x.get("label"), 80)} for x in L("items")][:4]}
+        elif t == "text":
+            data = {"title": txt(d.get("title"), 120), "body": txt(d.get("body"), 4000), "image": "", "imagePrompt": txt(d.get("imagePrompt"), 400)}
+        elif t == "gallery":
+            data = {"title": txt(d.get("title"), 120), "images": [{"url": "", "caption": txt(x.get("caption"), 120), "imagePrompt": txt(x.get("imagePrompt"), 400)} for x in L("images")][:4]}
+        elif t == "pricing":
+            data = {"title": txt(d.get("title"), 120), "subtitle": txt(d.get("subtitle"), 400), "plans": [{
+                "name": txt(x.get("name"), 60), "price": txt(x.get("price"), 20), "period": txt(x.get("period"), 30),
+                "features": txt(x.get("features") if isinstance(x.get("features"), str) else "\n".join(map(str, x.get("features") or [])), 800),
+                "cta": {"label": _link(x.get("cta"), fix)["label"] or "Pre-order", "href": buy}, "highlight": bool(x.get("highlight"))} for x in L("plans")][:3]}
+        elif t == "faq":
+            data = {"title": txt(d.get("title"), 120), "items": [{"q": txt(x.get("q"), 200), "a": txt(x.get("a"), 800)} for x in L("items")][:8]}
+        elif t == "signup":
+            data = {"title": txt(d.get("title"), 120), "text": txt(d.get("text"), 300), "button": txt(d.get("button"), 30) or "Join", "success": txt(d.get("success"), 160) or "Thanks, you're in."}
+        elif t == "cta":
+            data = {"title": txt(d.get("title"), 120), "text": txt(d.get("text"), 300), "button": _link(d.get("button"), fix)}
+        elif t == "posts":
+            data = {"title": txt(d.get("title"), 120) or "Blog", "subtitle": txt(d.get("subtitle"), 300)}
+        elif t == "footer":
+            data = {"text": txt(d.get("text"), 200), "links": [_link(x, fix) for x in L("links")][:6]}
+        else:
+            return None
+        return data
+
+    real_prices = set(re.findall(r"\$\s?\d[\d,.]*", _context(doc)))
+    norm = lambda p: re.sub(r"[\s,]", "", p).rstrip(".")
+    real_n = {norm(p) for p in real_prices}
+
+    def tidy(t: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if t == "steps":
+            for it in data["items"]:
+                it["title"] = re.sub(r"^\s*(step\s*)?\d+\s*[.):-]\s*", "", it["title"], flags=re.I)
+        if t == "stats":
+            return None  # facts strips invite made-up numbers
+        if t == "pricing" and real_n:
+            ok = [pl for pl in data["plans"] if any(norm(x) in real_n for x in re.findall(r"\$\s?\d[\d,.]*", pl["price"]))]
+            if not ok and data["plans"]:
+                first = data["plans"][0]
+                first["price"] = sorted(real_prices, key=len)[0].replace(" ", "")
+                ok = [first]
+            data["plans"] = ok
+            if len(ok) == 1:
+                ok[0]["highlight"] = True
+        return data
+
+    home = []
+    for s in home_raw:
+        data = clean(s)
+        data = tidy(s["type"], data) if data is not None else None
+        if data is None:
+            continue
+        home.append({"id": _sid(), "type": s["type"], "hidden": False, "anchor": s["_anchor"], "data": data})
+    if not any(s["type"] == "hero" for s in home):
+        raise HTTPException(502, "The AI didn't design a usable home page. Try again.")
+    name = doc.get("productName") or doc.get("product_name") or "Product"
+    if not home or home[0]["type"] != "nav":
+        home.insert(0, {"id": _sid(), "type": "nav", "hidden": False, "anchor": "nav", "data": {"brand": name, "links": [], "cta": {"label": "Pre-order", "href": buy}}})
+    if home[-1]["type"] != "footer":
+        home.append({"id": _sid(), "type": "footer", "hidden": False, "anchor": "footer", "data": {"text": f"© {datetime.utcnow().year} {name}", "links": []}})
+    # Header/footer page links are added by the renderer from page.menu, so drop duplicates the AI put in by hand.
+    for s in home:
+        if s["type"] in ("nav", "footer"):
+            s["data"]["links"] = [l for l in s["data"]["links"] if l["label"] and l["href"].lstrip("/") not in paths]
+            s["data"]["brand" if s["type"] == "nav" else "text"] = s["data"].get("brand" if s["type"] == "nav" else "text") or name
+
+    out_pages = []
+    for pg in pages:
+        r = pg["_raw"]
+        secs = []
+        for s in (r.get("sections") or [])[:6]:
+            if isinstance(s, dict) and s.get("type") in _ALLOWED - {"nav", "footer"}:
+                data = clean(s)
+                data = tidy(s["type"], data) if data is not None else None
+                if data is not None:
+                    secs.append({"id": _sid(), "type": s["type"], "hidden": False, "data": data})
+        is_blog = r.get("kind") == "blog" or pg["path"] == "blog"
+        if is_blog and not any(s["type"] == "posts" for s in secs):
+            secs.insert(0, {"id": _sid(), "type": "posts", "hidden": False, "data": {"title": "Blog", "subtitle": ""}})
+        if not secs:
+            continue
+        menu = r.get("menu") if r.get("menu") in ("header", "footer") else ("footer" if pg["path"] in ("terms", "privacy") else "header")
+        out_pages.append({"id": _sid(), "title": txt(r.get("title"), 40) or pg["path"].title(), "path": pg["path"], "menu": menu,
+                          "kind": "blog" if is_blog else (r.get("kind") or "page"), "sections": secs})
+    for p, path in zip(posts_raw, post_paths):
+        out_pages.append({"id": _sid(), "title": txt(p.get("title"), 120), "path": path, "menu": "none", "kind": "post",
+                          "excerpt": txt(p.get("excerpt"), 300), "date": _iso()[:10], "image": "", "imagePrompt": txt(p.get("imagePrompt"), 400),
+                          "sections": [{"id": _sid(), "type": "article", "hidden": False, "data": {"title": txt(p.get("title"), 160), "body": txt(p.get("body"), 8000), "image": "", "imagePrompt": txt(p.get("imagePrompt"), 400)}}]})
+
+    # Phase 1 is the source of truth: hero, features and look come from the approved concept.
+    for sec in home:
+        d = sec["data"]
+        if sec["type"] == "hero":
+            d.update({"eyebrow": p1["label"], "title": p1["tagline"] or d["title"], "subtitle": p1["problem"] or d["subtitle"],
+                      "cta": {"label": "Get early access", "href": buy}, "secondary": {"label": "", "href": ""},
+                      "note": p1["pricing"], "byline": f"Made with {p1['creator']}" if p1["creator"] else "", "avatar": p1["avatar"],
+                      "layout": "mockup", "image": "", "imagePrompt": "",
+                      "mockup": {"name": p1["name"], "tagline": p1["tagline"], "archetype": p1["archetype"], "landingIndex": p1["landingIndex"],
+                                 "keyFeatures": [f["title"] for f in p1["features"]]}})
+        elif sec["type"] == "features" and p1["features"]:
+            ai = {i["title"].lower(): i["text"] for i in d.get("items") or []}
+            d["items"] = [{"title": f["title"], "text": ai.get(f["title"].lower()) or f["text"]} for f in p1["features"]]
+        elif sec["type"] == "nav":
+            d["brand"] = p1["name"]
+            if d.get("cta", {}).get("label"):
+                d["cta"] = {"label": "Get early access", "href": buy}
+    th = raw.get("theme") if isinstance(raw.get("theme"), dict) else {}
+    theme = {"accent": p1["color"], "mode": "dark", "font": "modern"}
+    st = raw.get("settings") if isinstance(raw.get("settings"), dict) else {}
+    site = {"version": 1, "template": "ai", "theme": theme,
+            "settings": {"title": txt(st.get("title"), 70) or name, "description": txt(st.get("description"), 160), "logoUrl": "", "faviconUrl": ""},
+            "sections": home, "pages": out_pages}
+    return {"site": site}
 
 
 # ── Revision history ──────────────────────────────────────────────────────────────────────────────

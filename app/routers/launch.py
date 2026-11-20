@@ -425,6 +425,9 @@ def go_live(pid: str, body: GoLiveRequest, user=Depends(require_project_owner)):
     doc["publicMode"] = "live"
     doc["launchOverrideReason"] = body.overrideReason if failing else None
     _save_mongo_project(doc)
+    # Going live puts the product website online too (and emails its link the first time).
+    from app.routers.sites import publish_on_launch
+    publish_on_launch(doc, "live")
     sent = 0
     if body.notifyCustomers:
         seen = set()
@@ -598,6 +601,8 @@ def launch_decision(pid: str, body: DecisionRequest, user=Depends(require_projec
     status = {"scale": "scaling", "iterate": "iterating", "maintain": "maintaining", "kill": "killed"}[body.decision]
     doc["status"] = status
     doc["phase3Decision"] = {k: v for k, v in record.items() if k != "_id"}
+    doc["phase3Complete"] = True
+    doc["p3Complete"] = True
     if body.decision == "kill":
         doc["launchStatus"] = "CLOSED"
         doc["publicMode"] = "closed"
